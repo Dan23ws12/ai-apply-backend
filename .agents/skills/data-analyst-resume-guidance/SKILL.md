@@ -1,0 +1,80 @@
+---
+name: data-analyst-resume-guidance
+description: >-
+  Generates an ATS-friendly Microsoft Word resume for data analyst,
+  data architect, and similar roles. Use when the user asks to generate an ATS-friendly resume for a position similar to data analyst and company, supplies keywords, and includes a job posting link.
+metadata:
+  author: Daniel Oyeleye
+  version: "2.0"
+---
+
+# Data analyst resume
+
+Generate a new `.docx` resume. Do not edit an existing application resume unless the user asks to revise that file.
+
+Requests usually look like this:
+
+```
+Generate an ATS friendly resume that fits the attached job description for a __position__ at __company__
+Add the following keywords to the resume: __list_of_keywords__
+job posting: __job_website__
+```
+
+`__position__` is the role being applied for. `__company__` is the hiring company, government, or recruitment agency. `__list_of_keywords__` is the keyword list to fit to the posting. `__job_website__` is the page with the position name, duties, and qualifications.
+
+## Output
+
+Save the file at:
+
+`Resumes/Resumes for Job Search/{position}-{company}.docx`
+
+Use the position and company from the request. Example: `Business Intelligence Analyst-OpenCircle Contractors Association.docx`.
+
+Replace that file when regenerating the same position and company. Never modify `references\jb data_analyst_resume v4.1.2.docx`.
+
+## Before writing
+
+1. Take `__position__`, `__company__`, `__list_of_keywords__`, and `__job_website__` from the request. If one is missing, ask for it and stop.
+2. Open `__job_website__` and extract the position name, duties, and required qualifications. If the page cannot be read, ask the user to paste that text and stop.
+3. Rank keywords. Put user-supplied keywords first. Then add repeated duties and qualification terms from the posting, highest frequency and strongest requirement first. Keep exact phrases from the posting when they match work already on the base resume.
+4. Read [references/format.md](references/format.md) for format and tone, and [references/skill-positional-guidance.md](references/skill-positional-guidance.md) for which section each skill belongs in. Follow those files.
+5. Read the text of `references\jb data_analyst_resume v4.1.2.docx` and [references/curr-skills-and-tools.md](references/curr-skills-and-tools.md) before drafting.
+
+## Build the document
+
+Copy the base `.docx` and edit that copy. Replace paragraph text in place so alignment, bullet numbering, and section order stay as they are. Clone an existing bullet paragraph in the same job when a bullet must be added. Do not rebuild the resume with tables, text boxes, columns, images, or content in headers or footers.
+
+Keep these lines identical to the base resume:
+
+- Name and contact line
+- Employer names and dates
+- Job titles under each employer
+- Education block
+- Certification line
+
+Tailor only the professional summary, the technical-skills lines, and the experience bullets.
+
+Give **professional experience** more weight on work typical of a BI analyst:
+
+- Statistical and data analysis
+- Building reports and dashboards
+- Working with data visualization tools
+- Communicating analysis results
+
+Lead bullets with those actions. Keep requirements gathering and other general data-analyst work only when the posting asks for it, and give it less space than analysis, reporting, and communication.
+
+## Keywords and facts
+
+Add a skill or tool only if it was among the keywords in `__list_of_keywords__`, when it is already present in `references\jb data_analyst_resume v4.1.2.docx`, or it is listed in `references/curr-skills-and-tools.md` and closely matches at least one given keyword or a keyword found in the job description. Do not add any other skill or tool.
+
+Add user-supplied keywords, and higher-ranked posting keywords, into experience bullets when the base resume already supports that work. A higher-ranked keyword may appear in more than one bullet. Place each skill as specified in `references/skill-positional-guidance.md`.
+
+Use only employers, dates, and outcomes that appear in the base resume. Do not invent metrics, certifications, or duties. If a requested keyword cannot be added without inventing experience, leave it out.
+
+## Reply
+
+After the file is saved, report:
+
+- The saved path
+- The ranked keywords that were added
+- Any requested keywords left out, and the reason
