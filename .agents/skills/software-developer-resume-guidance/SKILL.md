@@ -1,16 +1,14 @@
 ---
 name: business-analyst-resume-guidance
 description: >-
-  Generates an ATS-friendly Microsoft Word resume for business analyst,
-  business intelligence analyst, BI analyst, Power BI developer, and similar
-  roles. Use when the user asks to generate an ATS-friendly resume for a
+  Generates an ATS-friendly Microsoft Word resume for software developer, software engineer, fullstack developer, frontend developer, backend developer, mobile app developer and similar roles. Use when the user asks to generate an ATS-friendly resume for a
   position and company, supplies keywords, and includes a job posting link.
 metadata:
   author: Daniel Oyeleye
   version: "2.0"
 ---
 
-# Business analyst resume
+# Prompt Template and Output
 
 Generate a new `.docx` resume. Do not edit an existing application resume unless the user asks to revise that file.
 
@@ -40,7 +38,7 @@ Replace that file when regenerating the same position and company. Never modify 
 2. Open `__job_website__` and extract the position name, duties, and required qualifications. If the page cannot be read, ask the user to paste that text and stop.
 3. Rank keywords. Put user-supplied keywords first. Then add repeated duties and qualification terms from the posting, highest frequency and strongest requirement first. Keep exact phrases from the posting when they match work already on the base resume.
 4. Read [shared-references/format.md](../../../shared-references/format.md) for format and tone, and [shared-references/skill-positional-guidance.md](../../../shared-references/skill-positional-guidance.md) for which section each skill belongs in. Follow those files.
-5. Read the text of `resumes/base resumes/software_developer_resume v2.2.0.docx` and [references/curr-skills-and-tools.md](references/curr-skills-and-tools.md) before drafting.
+5. Read the text of `resumes/base resumes/software_developer_resume v2.2.0.docx` and [shared-references/software-related-skills-and-tools.md](../../../shared-references/software-related-skills-and-tools.md) before drafting. Use `shared-references/software-related-skills-and-tools.md` as the extended list of job-related skills and tools.
 
 ## Build the document
 
@@ -56,12 +54,12 @@ Keep these lines identical to the base resume:
 
 Tailor only the professional summary, the technical-skills lines, and the experience bullets.
 
-Give **professional experience** more weight on work typical of a BI analyst:
+Give **professional experience** more weight on work typical of a software developer:
 
-- Statistical and data analysis
-- Building reports and dashboards
-- Working with data visualization tools
-- Communicating analysis results
+- Writing code that adhere to coding principles and standards
+- Building and testing applications
+- Collaborating with with other team members using Git and Github
+- Creating API endpoints, API integration, and handling HTTP requests and responses
 
 Lead bullets with those actions. Keep requirements gathering and other general business-analyst work only when the posting asks for it, and give it less space than analysis, reporting, and communication.
 

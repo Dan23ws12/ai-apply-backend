@@ -40,7 +40,7 @@ Replace that file when regenerating the same position and company. Never modify 
 2. Open `__job_website__` and extract the position name, duties, and required qualifications. If the page cannot be read, ask the user to paste that text and stop.
 3. Rank keywords. Put user-supplied keywords first. Then add repeated duties and qualification terms from the posting, highest frequency and strongest requirement first. Keep exact phrases from the posting when they match work already on the base resume.
 4. Read [shared-references/format.md](../../../shared-references/format.md) for format and tone, and [shared-references/skill-positional-guidance.md](../../../shared-references/skill-positional-guidance.md) for which section each skill belongs in. Follow those files.
-5. Read the text of `resumes/base resumes/business_analyst_resume v4.5.1.docx` and [references/curr-skills-and-tools.md](references/curr-skills-and-tools.md) before drafting.
+5. Read the text of `resumes/base resumes/business_analyst_resume v4.5.1.docx` and [shared-references/data-related-skills-and-tools.md](../../../shared-references/data-related-skills-and-tools.md) before drafting. Use `shared-references/data-related-skills-and-tools.md` as the extended list of job-related skills and tools.
 
 ## Build the document
 
