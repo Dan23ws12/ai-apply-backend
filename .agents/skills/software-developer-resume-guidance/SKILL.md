@@ -1,5 +1,5 @@
 ---
-name: business-analyst-resume-guidance
+name: software-developer-resume-guidance
 description: >-
   Generates an ATS-friendly Microsoft Word resume for software developer, software engineer, fullstack developer, frontend developer, backend developer, mobile app developer and similar roles. Use when the user asks to generate an ATS-friendly resume for a
   position and company, supplies keywords, and includes a job posting link.
