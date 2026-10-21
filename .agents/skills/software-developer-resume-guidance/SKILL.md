@@ -28,19 +28,19 @@ job posting: __job_website__
 
 Save the file at:
 
-`Resumes/Resumes for Job Search/{position}-{company}.docx`
+`resumes/jb resumes/{position}-{company}.docx`
 
 Use the position and company from the request. Example: `Business Intelligence Analyst-OpenCircle Contractors Association.docx`.
 
-Replace that file when regenerating the same position and company. Never modify `references/jb business_analyst_resume v4.3.0.docx`.
+Replace that file when regenerating the same position and company. Never modify `resumes/base resumes/software_developer_resume v2.2.0.docx`.
 
 ## Before writing
 
 1. Take `__position__`, `__company__`, `__list_of_keywords__`, and `__job_website__` from the request. If one is missing, ask for it and stop.
 2. Open `__job_website__` and extract the position name, duties, and required qualifications. If the page cannot be read, ask the user to paste that text and stop.
 3. Rank keywords. Put user-supplied keywords first. Then add repeated duties and qualification terms from the posting, highest frequency and strongest requirement first. Keep exact phrases from the posting when they match work already on the base resume.
-4. Read [references/format.md](references/format.md) for format and tone, and [references/skill-positional-guidance.md](references/skill-positional-guidance.md) for which section each skill belongs in. Follow those files.
-5. Read the text of `references/jb business_analyst_resume v4.3.0.docx` and [references/curr-skills-and-tools.md](references/curr-skills-and-tools.md) before drafting.
+4. Read [shared-references/format.md](../../../shared-references/format.md) for format and tone, and [shared-references/skill-positional-guidance.md](../../../shared-references/skill-positional-guidance.md) for which section each skill belongs in. Follow those files.
+5. Read the text of `resumes/base resumes/software_developer_resume v2.2.0.docx` and [references/curr-skills-and-tools.md](references/curr-skills-and-tools.md) before drafting.
 
 ## Build the document
 
@@ -67,9 +67,8 @@ Lead bullets with those actions. Keep requirements gathering and other general b
 
 ## Keywords and facts
 
-Add a skill or tool only if it was among the keywords in `__list_of_keywords__`, when it is already present in `references/jb business_analyst_resume v4.3.0.docx`, or it is listed in `references/curr-skills-and-tools.md` and closely matches at least one given keyword or a keyword found in the job description. Do not add any other skill or tool.
 
-Add user-supplied keywords, and higher-ranked posting keywords, into experience bullets when the base resume already supports that work. A higher-ranked keyword may appear in more than one bullet. Place each skill as specified in `references/skill-positional-guidance.md`.
+A higher-ranked keyword may appear in more than one bullet. Place keywords in `__list_of_keywords__`, and higher-ranked posting keywords as specified in `shared-references/skill-positional-guidance.md`.
 
 Use only employers, dates, and outcomes that appear in the base resume. Do not invent metrics, certifications, or duties. If a requested keyword cannot be added without inventing experience, leave it out.
 
