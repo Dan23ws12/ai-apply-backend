@@ -1,22 +1,29 @@
 ---
 name: job-post-evaluation
 description: >-
-  Rates from 1 to 100 how well a job posting matches the applicant's base
-  resume and extended skills lists, scoring keywords, required skills,
-  experience, education and seniority. Picks the right base resume for the
-  role (software developer, data analyst, business analyst or non-IT). Use when
-  the user asks to evaluate, score, rate or match a job posting, or asks
-  whether a job is a good fit or worth applying to.
+  Evaluates a job posting with two independent ratings from 1 to 100. First, a
+  fraud likelihood rating (higher means more likely a scam or fake job), using
+  the posting, company website, LinkedIn and the posting site. Then, unless the
+  fraud rating is 80 or more, a job match rating (higher means a better fit)
+  against the right base resume and the extended and shared skills lists. Use
+  when the user asks to evaluate, score, rate or match a job posting, asks
+  whether a job is real, fake or a scam, or asks whether a job is a good fit or
+  worth applying to.
 metadata:
   author: Daniel Oyeleye
-  version: "1.2"
+  version: "2.0"
 ---
 
 # Job post evaluation
 
-Give one job posting a **match rating from 1 to 100**. A higher rating means the applicant's resume and skills fit the posting better. The rating answers one question: how well does the right base resume, plus the skills the applicant also has, cover what this posting asks for?
+Give one job posting two ratings, in this order:
 
-This skill only rates. It does not write or edit a resume, and it does not judge whether the posting is fraudulent (use `fraud-likelihood-evaluation` for that).
+1. **Fraud likelihood rating, 1 to 100.** A higher rating means the posting is more likely a scam or a fake job.
+2. **Job match rating, 1 to 100.** A higher rating means the applicant's resume and skills fit the posting better. **Skip this rating when the fraud likelihood rating is 80 or more.**
+
+The two ratings are **independent**. Work out the fraud likelihood rating without looking at the resume or the match, and work out the match rating as if the fraud check had never happened. A strong match never lowers the fraud rating, and a suspicious posting never lowers the match rating. The fraud rating only decides whether the match rating is worked out at all.
+
+This skill only rates. It does not write or edit a resume.
 
 Requests usually look like this:
 
@@ -24,18 +31,68 @@ Requests usually look like this:
 Evaluate this job posting: __job_website__
 ```
 
-or the posting text pasted into the message, sometimes with `__position__` and `__company__`.
+or the posting text pasted into the message, sometimes with `__position__`, `__company__` and the company website.
 
 ## Step 1: Get the posting
 
 1. If the user gave a link, open it and extract the position name, company, duties, required qualifications and preferred qualifications. If the page cannot be read, ask the user to paste the posting text and stop.
 2. If the user pasted the text, use it as given.
-3. Sort every qualification into **required** or **preferred**:
+
+# Fraud likelihood rating
+
+Use only the posting, the company website, the posting site and what you find about the company online. Do not read the resume or the skills lists for this part.
+
+## Fraud check steps
+
+1. **Accept** the company website, the name of the position, the company, and the job posting page. If the company website is not given, look for it in the posting or search for it.
+2. **Scrape** the job description off the job posting page (Step 1 above). Note anything that looks wrong, such as no duties, no company details or copied text.
+3. **Search** for the company name on LinkedIn. Check that a company page exists and that its size, industry and location fit the posting.
+4. **Check** that the company name on the website and on the job posting are the same. This check does not apply to recruitment agencies posting for a client.
+5. **Check the validity of the job posting website**: it uses HTTPS, the link works, and the domain is the company's own domain, a known job board (LinkedIn, Glassdoor, Indeed) or a known applicant tracking system (Greenhouse, Lever, Workday, Ashby, SmartRecruiters and similar). Look-alike domains (for example `shopify-careers-onboarding.net`) are a red flag.
+6. **Evaluate** whether the job posting is fraudulent, give the rating, and explain the findings.
+
+## Red flags and their weight
+
+List every red flag you confirm, with its weight:
+
+| Weight | Red flags | Points |
+|---|---|---|
+| Critical | Asks the applicant to pay anything (fees, training, equipment from a "vendor"); sends a cheque to deposit or forward; asks for banking details, a SIN/SSN or ID before a written offer | 45 |
+| High | Interview only through a chat app (Telegram, WhatsApp, Signal); company email on a free domain (Gmail, Outlook, Yahoo); posting or apply link on a look-alike or unrelated domain; company name does not match the website (not a recruitment agency); no trace of the company on LinkedIn or the web | 25 |
+| Medium | Pay far above the market for the duties; vague duties with no company details; "no experience needed" with high pay; the posting site does not work or has no HTTPS | 10 |
+| Low | Urgency or pressure wording ("urgent", "start immediately"); spelling and grammar problems; very short posting | 4 |
+
+Recruitment agencies, remote work and a missing salary are **not** red flags by themselves.
+
+## Calculate the rating
+
+1. Start at 1 and add the points for every confirmed red flag.
+2. If there is at least one critical red flag, the rating is **at least 80**.
+3. The highest rating is 100.
+
+| Rating | Meaning |
+|---|---|
+| 80–100 | Very likely a scam. Do not apply. The match rating is skipped. |
+| 50–79 | Suspicious. Check the company before sharing any details. |
+| 20–49 | Some concerns. Usually a real posting with minor issues. |
+| 1–19 | No real concerns found. |
+
+## Reasoning
+
+Write two or three short sentences in simple words saying why the posting got its rating: the red flags you confirmed, or what you checked and found normal (LinkedIn page, matching domain, known job board).
+
+**If the fraud likelihood rating is 80 or more, stop here.** Give the fraud reply and say the match rating was skipped because the posting is very likely a scam.
+
+# Job match rating
+
+## Match step 1: Sort the qualifications
+
+Sort every qualification in the posting into **required** or **preferred**:
    - Preferred: lines marked nice to have, asset, bonus, plus, preferred or "would be great". Anything inside a required line that is marked preferred (for example "SQL databases (PostgreSQL preferred)") is preferred; the rest of that line stays required.
    - Required: everything else under the requirements or qualifications heading, and all duties.
    - If the same item is both required somewhere (for example in a duty) and marked preferred elsewhere, it is required.
 
-## Step 2: Choose the base resume
+## Match step 2: Choose the base resume
 
 Pick the track that best matches the posting's **title and main duties**:
 
@@ -51,7 +108,7 @@ Use the base resume named in that track's resume guide (the `resumes/base resume
 - **Two tracks.** If more than a third of the main duties belong to a second track (for example a "Python Developer, Data Platform" role that is half backend coding and half data pipelines), rate the posting against both resumes and report the higher rating. Add a line to the reply giving the other track's rating.
 - **No track fits.** If the role is in a field none of the tracks cover (for example nursing, law, skilled trades or teaching), use the Non-IT resume, score as normal, and say "No track fits this role" in the summary.
 
-## Step 3: Read the skills lists
+## Match step 3: Read the skills lists
 
 Read both of these files:
 
@@ -68,7 +125,7 @@ Read both of these files:
 
 Skills in these lists are ones the applicant has but that may not be on the base resume. Text in parentheses is another name for the same item, so "React.js" in a posting matches "React (React.js, ReactJS)".
 
-## Step 4: Score the posting
+## Match step 4: Score the posting
 
 Score each part below, then add the parts together.
 
@@ -169,7 +226,7 @@ If the posting has no preferred items, use Part A's coverage: Score = 10 × Part
 3. **Score.**
    - 10: same level, or the applicant is above the posting's level.
    - 5: the applicant is one level below.
-   - 0: two or more levels below, or no track fits the role (Step 2).
+   - 0: two or more levels below, or no track fits the role (match step 2).
 
 ### Caps and the final number
 
@@ -197,10 +254,26 @@ Round to a whole number. The lowest rating is 1 and the highest is 100.
 - Give credit for an equivalent only under the close-equivalent rule above.
 - If the posting has no clear requirements list, build Part A from the duties and title, and say the posting was vague.
 - Score the same way every time: list the items for each part, give each item its credit, then do the arithmetic.
+- Do not use any fraud finding in this part.
 
-## Reply
+# Reply
 
-Start with the rating, then keep the rest short and in plain words:
+Give the fraud likelihood rating first, then the match rating. Keep both short and in plain words.
+
+```
+Fraud likelihood rating: 12/100 (No real concerns found)
+Checked: <LinkedIn page found / not found>, <company name matches website / does not>, <posting site: known job board, company domain or look-alike>
+Red flags: <each confirmed flag with its weight, or "none">
+Reasoning: <two or three short sentences>
+```
+
+When the fraud likelihood rating is 80 or more, end with:
+
+```
+Match rating: skipped (the posting is very likely a scam)
+```
+
+Otherwise continue with the match rating:
 
 - Show each part score to one decimal place. The rating is the rounded total after caps.
 - In the caps row, list every cap that applies. Add "(no effect)" when the score was already below it.
