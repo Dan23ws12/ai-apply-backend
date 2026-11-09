@@ -116,7 +116,9 @@ def _apply(info: ParaInfo, new_text: str, bold_terms: list[str]) -> None:
 
 
 def _safe(name: str) -> str:
-    return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", name).strip()[:80] or "job"
+    """Removes characters Windows does not allow in file names."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", name)
+    return re.sub(r"\s+", " ", cleaned).strip().rstrip(".")[:80] or "job"
 
 
 # ───────────────────────── public API ─────────────────────────
@@ -144,15 +146,15 @@ def build_documents(req: DocumentsRequest) -> dict:
         anchor.paragraph._p.addnext(new_p)
         _apply(ParaInfo(-1, anchor.section, "bullet", Paragraph(new_p, anchor.paragraph._parent)), nb.text, nb.bold_terms)
 
-    folder = settings.out / _safe(req.job_id)
-    folder.mkdir(parents=True, exist_ok=True)
+    # Same naming as the resume skills: "{position}-{company}.docx".
+    # Regenerating the same position and company replaces the file.
     stem = f"{_safe(req.job.title)}-{_safe(req.job.company)}"
-    resume_path = folder / f"{stem} - Resume.docx"
+    resume_path = settings.resume_out / f"{stem}.docx"
     doc.save(str(resume_path))
 
     resume_text = "\n".join(p.text for p in Document(str(resume_path)).paragraphs if p.text.strip())
     letter = ai.cover_letter(req.resume_category, req.job, req.applicant, resume_text)
-    cover_path = folder / f"{stem} - Cover Letter.docx"
+    cover_path = settings.cover_letter_out / f"{stem}.docx"
     write_cover_letter(cover_path, req.applicant, req.job, letter)
 
     return {

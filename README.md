@@ -44,9 +44,18 @@ Search criteria ──► JSearch (SerpApi Google Jobs if JSearch fails)
 
 ## Project structure
 
+Everything sits in the repository root, next to the existing skills, references and resumes.
+
 ```
-job-apply-app/
+AI Job Apply Project/
 ├── README.md
+├── .agents/skills/           # Existing resume and fraud-check skills (read by the AI)
+├── shared-references/        # Existing format rules and extended skills lists (read by the AI)
+├── resumes/
+│   ├── base resumes/         # Your base resumes (copied, never changed)
+│   └── jb resumes/           # ★ Tailored resumes the app creates: "{position}-{company}.docx"
+├── cover-letters/            # ★ Cover letters the app creates: "{position}-{company}.docx"
+├── Job_APIs_and_Scrapers_Comparison.md
 ├── package.json              # Node scripts and dependencies
 ├── tsconfig.json
 ├── prisma.config.ts          # Prisma 7 config (reads DATABASE_URL)
@@ -85,9 +94,10 @@ job-apply-app/
 │       ├── schemas.py        # Pydantic models
 │       └── config.py
 └── storage/                  # Created at runtime (git-ignored)
-    ├── documents/<job id>/   # Generated resumes and cover letters
     └── browser-profiles/     # Saved browser profile, so you stay logged in
 ```
+
+Generated documents use the same naming as the resume skills: `{position}-{company}.docx`. Generating documents again for the same position and company replaces both files. Characters Windows doesn't allow in file names (such as `/` or `:`) are replaced with spaces. To save the documents somewhere else, change `RESUME_OUTPUT_DIR` and `COVER_LETTER_OUTPUT_DIR` in `python-service/.env`.
 
 The Python service reuses files that already exist in this repository:
 
@@ -158,9 +168,8 @@ Content-Type: application/json
 
 ### 2. Set up the Node API
 
-```bash
-cd job-apply-app
-```
+Run these from the repository root (the folder that contains `package.json`):
+
 ```bash
 npm install
 ```
@@ -286,6 +295,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | Fraud check rules | `.agents/skills/fraud-likelihood-evaluation/SKILL.md` and the fraud signs in `python-service/app/ai.py` (`score_job`) |
 | Claude model and effort | `python-service/.env`: `AI_MODEL`, `AI_EFFORT_SCORING`, `AI_EFFORT_DOCUMENTS`, `AI_EFFORT_ANSWERS` |
 | Cover letter style | The `cover_letter()` prompt in `python-service/app/ai.py` |
+| Where resumes and cover letters are saved | `RESUME_OUTPUT_DIR` and `COVER_LETTER_OUTPUT_DIR` in `python-service/.env` (defaults: `resumes/jb resumes` and `cover-letters`) |
 | Answers to common questions (relocation, pronouns, etc.) | `extraAnswers` in your profile, or `PUT /api/answers/:id` |
 | Which job sites count | `websites` in each search (`LINKEDIN`, `GLASSDOOR`, `INDEED`, `COMPANY_SITE`, `OTHER`) |
 | Match and fraud limits | `minMatchRating` / `maxFraudRating` in each search |
