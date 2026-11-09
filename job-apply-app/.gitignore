@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+/src/generated/prisma
+# Generated resumes / cover letters and the Playwright browser profile
+storage/
+python-service/.venv/
+__pycache__/
