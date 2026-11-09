@@ -7,15 +7,26 @@ import { audit } from "./audit.service.js";
  * Every response is checked with Zod so a bad reply fails loudly instead of corrupting data.
  */
 
-export const ScoreResult = z.object({
-  match_rating: z.number().int().min(0).max(100),
-  match_reason: z.string(),
-  fraud_rating: z.number().int().min(0).max(100),
-  fraud_reason: z.string(),
-  resume_category: z.enum(["software_developer", "data_analyst", "business_analyst", "non_it"]),
-  keywords: z.array(z.string()),
+/** Fraud likelihood rating: 1-100, higher = more likely a scam. Never uses the resume. */
+export const FraudResult = z.object({
+  fraud_rating: z.number().int().min(1).max(100),
+  reasoning: z.string(),
+  red_flags: z.array(z.object({ flag: z.string(), weight: z.enum(["critical", "high", "medium", "low"]) })),
+  checks: z.record(z.string(), z.unknown()),
+  skip_match: z.boolean(),
 });
-export type ScoreResult = z.infer<typeof ScoreResult>;
+export type FraudResult = z.infer<typeof FraudResult>;
+
+/** Job match rating: 1-100, higher = better fit. Never uses fraud findings. */
+export const MatchResult = z.object({
+  match_rating: z.number().int().min(1).max(100),
+  resume_category: z.enum(["software_developer", "data_analyst", "business_analyst", "non_it"]),
+  no_track_fits: z.boolean(),
+  keywords: z.array(z.string()),
+  reasoning: z.string(),
+  details: z.record(z.string(), z.unknown()),
+});
+export type MatchResult = z.infer<typeof MatchResult>;
 
 export const DocumentsResult = z.object({
   resume_path: z.string(),
@@ -94,8 +105,14 @@ async function call<S extends z.ZodType>(
 }
 
 export const aiClient = {
-  score: (body: { job: JobForAi; preferred_category?: string | null }, ctx: { userId?: string; requestId?: string }) =>
-    call("/score", body, ScoreResult, ctx),
+  /** Step 1 of evaluation. Sends only the posting and company details. */
+  fraud: (job: JobForAi, ctx: { userId?: string; requestId?: string }) => call("/evaluate/fraud", job, FraudResult, ctx),
+
+  /** Step 2 of evaluation. Sends only the posting; no fraud findings. */
+  match: (
+    body: { title: string; company: string; description: string; location?: string | null; preferred_category?: string | null },
+    ctx: { userId?: string; requestId?: string },
+  ) => call("/evaluate/match", body, MatchResult, ctx),
 
   documents: (
     body: { job_id: string; job: JobForAi; applicant: ApplicantForAi; resume_category: string; keywords: string[] },

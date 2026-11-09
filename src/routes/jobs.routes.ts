@@ -5,7 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { HttpError, notFound } from "../lib/errors.js";
 import { body, params, query, validate } from "../middleware/validate.js";
 import { FileParams, IdParams, JobListQuery, UpdateFilesBody, UpdateJobBody } from "../schemas/index.js";
-import { generateDocuments, scoreJob } from "../services/pipeline.service.js";
+import { SKIP_MATCH_FRAUD_RATING, evaluateJob, generateDocuments } from "../services/pipeline.service.js";
 import { autofillStatus, startAutofill } from "../autofill/autofill.service.js";
 import { isBlacklisted } from "../services/blacklist.service.js";
 
@@ -63,10 +63,20 @@ jobsRouter.patch("/:id", validate({ params: IdParams, body: UpdateJobBody }), as
   res.json({ item });
 });
 
-jobsRouter.post("/:id/score", validate({ params: IdParams }), async (req, res) => {
+/**
+ * Re-runs the evaluation: fraud likelihood rating first, then (unless fraud >= 80)
+ * the job match rating. The two ratings are worked out independently.
+ */
+jobsRouter.post("/:id/evaluate", validate({ params: IdParams }), async (req, res) => {
   const { id } = params(req, IdParams);
   await ownJob(req.user!.id, id);
-  res.json({ result: await scoreJob(id, { userId: req.user!.id, requestId: req.requestId }) });
+  const { fraud, match } = await evaluateJob(id, { userId: req.user!.id, requestId: req.requestId });
+  res.json({
+    fraud: { rating: fraud.fraud_rating, reasoning: fraud.reasoning, redFlags: fraud.red_flags, checks: fraud.checks },
+    match: match
+      ? { rating: match.match_rating, reasoning: match.reasoning, resumeCategory: match.resume_category, keywords: match.keywords }
+      : { rating: null, skipped: true, reason: "Fraud rating is 80 or more" },
+  });
 });
 
 jobsRouter.post("/:id/documents", validate({ params: IdParams }), async (req, res) => {
@@ -117,6 +127,9 @@ jobsRouter.get("/:id/files/:kind", validate({ params: FileParams }), async (req,
 jobsRouter.post("/:id/autofill", validate({ params: IdParams }), async (req, res) => {
   const job = await ownJob(req.user!.id, params(req, IdParams).id);
   if (await isBlacklisted(req.user!.id, job.companyId)) throw new HttpError(409, "Company is blacklisted");
+  if (job.fraudRating != null && job.fraudRating >= SKIP_MATCH_FRAUD_RATING) {
+    throw new HttpError(409, `This posting is very likely a scam (fraud rating ${job.fraudRating}/100)`);
+  }
   if (!job.applicationFiles?.resumeLink) throw new HttpError(409, "Generate documents for this job first");
   const session = await startAutofill(job.id, { userId: req.user!.id, requestId: req.requestId });
   res.status(202).json({

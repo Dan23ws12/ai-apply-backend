@@ -3,7 +3,7 @@ Loads the project's existing resume skills and reference files so the AI follows
 the same rules you use by hand:
 
     .agents/skills/<category>-resume-guidance/SKILL.md   -> instructions per resume type
-    .agents/skills/fraud-likelihood-evaluation/SKILL.md  -> fraud check instructions
+    .agents/skills/job-post-evaluation/SKILL.md          -> fraud and match rating rules (mirrored in fraud.py / match.py)
     shared-references/*.md                               -> format, skill placement, extended skills lists
     resumes/base resumes/*.docx                          -> base resumes (never modified)
 
@@ -107,7 +107,3 @@ def shared_rules() -> str:
         + "\n\n## Skill placement\n" + _read(refs / "skill-positional-guidance.md")
     )
 
-
-@lru_cache(maxsize=None)
-def fraud_skill() -> str:
-    return _strip_frontmatter(_read(settings.root / ".agents" / "skills" / "fraud-likelihood-evaluation" / "SKILL.md"))

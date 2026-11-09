@@ -10,9 +10,27 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     ai_model: str = "claude-opus-5-5"
-    ai_effort_scoring: str = "low"
     ai_effort_documents: str = "high"
     ai_effort_answers: str = "medium"
+
+    # Job post evaluation (two independent calls). Empty model = use ai_model.
+    ai_model_fraud: str = ""
+    ai_effort_fraud: str = "low"
+    ai_model_match: str = ""
+    ai_effort_match: str = "low"
+    # Fraud check step 3: search for the company on LinkedIn with Claude's web search tool.
+    fraud_web_search: bool = True
+    fraud_max_searches: int = 3
+    # Fraud check steps 2 and 5: download the posting page to read it and check the site.
+    fraud_fetch_posting_page: bool = True
+
+    @property
+    def fraud_model(self) -> str:
+        return self.ai_model_fraud or self.ai_model
+
+    @property
+    def match_model(self) -> str:
+        return self.ai_model_match or self.ai_model
 
     python_service_token: str
 

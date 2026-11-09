@@ -234,12 +234,17 @@ model Job {
   salaryPeriod      String?
   /// When the job was posted (null when the search API did not say).
   postedAt          DateTime?
-  /// 0-100: how likely the posting is fraudulent.
+  /// Optional. 1-100: likelihood the posting is a scam or fake (higher = more likely). Rated first, independently of the match.
   fraudRating       Int?
   fraudReason       String?           @db.Text
-  /// 0-100: how well the job matches the resume and extended skills list.
+  /// Optional. 1-100: how well the job matches the resume and skills lists (higher = better). Rated independently of fraud; skipped when fraudRating >= 80.
   matchRating       Int?
   matchReason       String?           @db.Text
+  /// Fraud check details: red flags with weights, LinkedIn / domain / posting-site checks.
+  fraudDetails      Json?
+  /// Match details: chosen resume track, keywords to add, part scores, caps.
+  /// Null when the match rating was skipped (fraud rating 80 or more).
+  matchDetails      Json?
   applicationStatus ApplicationStatus @default(FOUND)
   /// Last error or status note, e.g. why the job was skipped.
   statusMessage     String?           @db.Text

@@ -21,8 +21,6 @@ from .schemas import (
     CoverLetter,
     Job,
     ResumeEdits,
-    ScoreRequest,
-    ScoreResult,
 )
 
 log = logging.getLogger("ai")
@@ -81,46 +79,6 @@ def _job_block(job: Job) -> str:
         f"Apply link: {job.apply_url or 'unknown'}\nListed on: {job.publisher or 'unknown'}\n\n"
         f"Description:\n{job.description}\n</job>"
     )
-
-
-# ───────────────────────────── scoring ─────────────────────────────
-
-def score_job(req: ScoreRequest) -> ScoreResult:
-    resumes = "\n\n".join(
-        f'<resume category="{c}">\n{refs.load_category(c).base_resume_text}\n</resume>\n'
-        f'<extended_skills category="{c}">\n{refs.load_category(c).extended_skills}\n</extended_skills>'
-        for c in refs.CATEGORIES
-    )
-    system = [
-        _cached(
-            "You screen job postings for one applicant. You have their base resumes (one per career "
-            "track) and, for each track, an extended list of skills and tools they also know.\n\n"
-            + resumes
-            + "\n\n# Fraud check instructions\n" + refs.fraud_skill()
-            + "\n\nYou cannot browse the web here, so judge fraud only from the posting text, company "
-            "name, website and apply link. Common signs of fraud: payment or equipment purchase requested, "
-            "chat-app interviews (Telegram/WhatsApp), personal email domains, vague duties with very high pay, "
-            "company name that does not match the website or apply link, urgency pressure, requests for "
-            "banking or ID details before an offer. Recruitment agencies are not fraud by themselves."
-        )
-    ]
-    preferred = (
-        f"The applicant prefers the '{req.preferred_category}' resume; use it unless it clearly does not fit."
-        if req.preferred_category
-        else "Choose the resume category that fits this job best."
-    )
-    user = (
-        f"{_job_block(req.job)}\n\n{preferred}\n\n"
-        "Return:\n"
-        "- resume_category: the base resume to tailor.\n"
-        "- match_rating 0-100: how well the posting's duties and requirements match that resume plus its "
-        "extended skills list. 80+ strong, 60-79 reasonable, below 60 weak. Penalise hard requirements the "
-        "applicant clearly lacks (years, licences, degrees, clearances).\n"
-        "- fraud_rating 0-100 and fraud_reason (start with the percentage).\n"
-        "- keywords: up to 15 ranked terms from the posting worth adding to the resume, strongest and most "
-        "repeated first, only ones the applicant can honestly claim."
-    )
-    return _ask(system, user, ScoreResult, settings.ai_effort_scoring, max_tokens=4000)
 
 
 # ───────────────────────────── resume ─────────────────────────────

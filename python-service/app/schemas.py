@@ -39,9 +39,6 @@ class Applicant(BaseModel):
     extra_answers: dict[str, str] | None = None
 
 
-class ScoreRequest(BaseModel):
-    job: Job
-    preferred_category: Category | None = None
 
 
 class DocumentsRequest(BaseModel):
@@ -67,13 +64,6 @@ class AnswersRequest(BaseModel):
 
 
 # ── Structured outputs returned by Claude ──
-class ScoreResult(BaseModel):
-    match_rating: int = Field(description="0-100, how well the job fits the chosen base resume and extended skills list")
-    match_reason: str = Field(description="Two or three short sentences")
-    fraud_rating: int = Field(description="0-100, likelihood the posting is fraudulent")
-    fraud_reason: str = Field(description="Starts with the percentage, then short reasons in simple words")
-    resume_category: Category
-    keywords: list[str] = Field(description="Ranked keywords from the posting to add to the resume, strongest first, max 15")
 
 
 class ParagraphEdit(BaseModel):
