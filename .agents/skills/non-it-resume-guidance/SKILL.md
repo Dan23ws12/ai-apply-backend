@@ -1,16 +1,17 @@
 ---
-name: business-analyst-resume-guidance
+name: non-it-resume-guidance
 description: >-
-  Generates an ATS-friendly Microsoft Word resume for business analyst,
-  business intelligence analyst, BI analyst, Power BI developer, and similar
-  roles. Use when the user asks to generate an ATS-friendly resume for a
-  position and company, supplies keywords, and includes a job posting link.
+  Generates an ATS-friendly Microsoft Word resume for administrative assistant,
+  executive assistant, office, customer service, sales, data entry, and other
+  non-IT roles. Use when the user asks to generate an ATS-friendly resume for a
+  non-technical position and company, supplies keywords, and includes a job
+  posting link.
 metadata:
   author: Daniel Oyeleye
-  version: "3.0"
+  version: "3.1"
 ---
 
-# Business analyst resume
+# Non-IT resume
 
 Generate a new `.docx` resume. Do not edit an existing application resume unless the user asks to revise that file.
 
@@ -28,7 +29,7 @@ job posting: __job_website__
 
 Save the file at:
 
-`Resumes/Resumes for Job Search/{position}-{company}.docx`
+`resumes/jb resumes/{position}-{company}.docx`
 
 Use the position and company from the request. Example: `Business Intelligence Analyst-OpenCircle Contractors Association.docx`.
 
