@@ -1,0 +1,16 @@
+import "express";
+
+declare global {
+  namespace Express {
+    interface Request {
+      /** Set by middleware/requestContext.ts */
+      requestId: string;
+      /** Set by middleware/auth.ts */
+      user?: { id: string; email: string };
+      /** Zod-parsed body / query / params, set by middleware/validate.ts */
+      valid: { body?: unknown; query?: unknown; params?: unknown };
+    }
+  }
+}
+
+export {};
