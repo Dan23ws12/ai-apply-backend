@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { HttpError } from "../lib/errors.js";
+import { prisma } from "../lib/prisma.js";
 
 const TokenPayload = z.object({ sub: z.string(), email: z.email() });
 
@@ -19,12 +20,19 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
   const [scheme, token] = header.split(" ");
   if (scheme !== "Bearer" || !token) return next(new HttpError(401, "Missing bearer token"));
 
+  let payload: z.infer<typeof TokenPayload>;
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET);
-    const payload = TokenPayload.parse(decoded);
-    req.user = { id: payload.sub, email: payload.email };
-    next();
+    payload = TokenPayload.parse(jwt.verify(token, env.JWT_SECRET));
   } catch {
-    next(new HttpError(401, "Invalid or expired token"));
+    return next(new HttpError(401, "Invalid or expired token"));
   }
+  // Tokens of deleted accounts must stop working straight away.
+  prisma.user
+    .findUnique({ where: { id: payload.sub }, select: { id: true } })
+    .then((user) => {
+      if (!user) return next(new HttpError(401, "Account no longer exists"));
+      req.user = { id: payload.sub, email: payload.email };
+      next();
+    })
+    .catch(next);
 };

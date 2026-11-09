@@ -26,11 +26,11 @@ export async function loadApplicant(userId: string): Promise<ApplicantForAi> {
   };
 }
 
-export function jobForAi(job: Job & { company: Company }): JobForAi {
+export function jobForAi(job: Job & { company: Company | null }): JobForAi {
   return {
     title: job.positionName,
-    company: job.company.name,
-    company_website: job.company.websiteUrl,
+    company: job.company?.name ?? job.companyName,
+    company_website: job.company?.websiteUrl ?? null,
     description: job.description ?? "",
     location: job.location,
     apply_url: job.applicationLink,

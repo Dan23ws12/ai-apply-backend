@@ -48,23 +48,22 @@ enum SearchProvider {
 }
 
 enum ApplicationStatus {
-  FOUND               // found; no resume or cover letter created yet
-  SKIPPED             // SUGGESTED: filtered out (blacklisted, low match, likely fraud)
-  DOCUMENTS_READY     // SUGGESTED: resume + cover letter generated
-  SAVED               // user saved the job for later
-  FORM_FILLED         // SUGGESTED: form auto-filled, waiting for the user to submit
-  INCOMPLETE          // application was started but not completed
-  ERROR               // an error occurred while processing
-  APPLIED             // user submitted the application
+  FOUND // found; no resume or cover letter created yet
+  SKIPPED // SUGGESTED: filtered out (blacklisted, low match, likely fraud)
+  DOCUMENTS_READY // SUGGESTED: resume + cover letter generated
+  SAVED // user saved the job for later
+  FORM_FILLED // SUGGESTED: form auto-filled, waiting for the user to submit
+  INCOMPLETE // application was started but not completed
+  ERROR // an error occurred while processing
+  APPLIED // user submitted the application
 }
 
-/// Bucket for how recently the job was posted.
+/// Search filter: only find jobs posted within this period.
+/// (Jobs store the exact date in jobs.postedAt instead of a bucket.)
 enum DatePostedRange {
   PAST_WEEK
   PAST_2_WEEKS
   PAST_MONTH
-  OLDER
-  UNKNOWN
 }
 
 enum AnswerSource {
@@ -97,11 +96,12 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  profile         UserProfile?
-  searchCriteria  SearchCriteria[]
-  jobs            Job[]
-  answers         ApplicationAnswer[]
-  auditLogs       AuditLog[]
+  profile              UserProfile?
+  searchCriteria       SearchCriteria[]
+  jobs                 Job[]
+  answers              ApplicationAnswer[]
+  auditLogs            AuditLog[]
+  blacklistedCompanies Blacklisted[]
 
   @@map("users")
 }
@@ -109,29 +109,29 @@ model User {
 /// SUGGESTED: the data used to fill application forms. Kept apart from `users`
 /// so login data and form-filling data change independently.
 model UserProfile {
-  id                   String   @id @default(uuid())
-  userId               String   @unique
-  phone                String?
-  addressLine          String?
-  city                 String?
-  region               String?  // province / state
-  country              String?
-  postalCode           String?
-  linkedinUrl          String?
-  githubUrl            String?
-  portfolioUrl         String?
-  workAuthorization    String?  // e.g. "Canadian citizen", "Permanent resident"
-  requiresSponsorship  Boolean?
-  yearsOfExperience    Int?
-  desiredSalary        String?
-  noticePeriod         String?  // e.g. "2 weeks"
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  phone                 String?
+  addressLine           String?
+  city                  String?
+  region                String? // province / state
+  country               String?
+  postalCode            String?
+  linkedinUrl           String?
+  githubUrl             String?
+  portfolioUrl          String?
+  workAuthorization     String? // e.g. "Canadian citizen", "Permanent resident"
+  requiresSponsorship   Boolean?
+  yearsOfExperience     Int?
+  desiredSalary         String?
+  noticePeriod          String? // e.g. "2 weeks"
   /// Which base resume to tailor: software_developer | data_analyst | business_analyst | non_it.
   /// Null = let the AI choose from the job description.
   defaultResumeCategory String?
   /// Free-form extra answers, e.g. { "pronouns": "...", "willing_to_relocate": "Yes" }
-  extraAnswers         Json?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  extraAnswers          Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -142,9 +142,9 @@ model UserProfile {
 model SearchCriteria {
   id               String            @id @default(uuid())
   userId           String
-  name             String            // e.g. "Remote data analyst roles"
-  query            String            // position keywords, e.g. "data analyst"
-  location         String?           // e.g. "Toronto, ON"
+  name             String // e.g. "Remote data analyst roles"
+  query            String // position keywords, e.g. "data analyst"
+  location         String? // e.g. "Toronto, ON"
   country          String            @default("ca") // ISO 3166-1 alpha-2
   datePosted       DatePostedRange   @default(PAST_WEEK)
   jobTypes         JobType[]
@@ -179,22 +179,42 @@ model Company {
   normalizedName     String   @unique
   headOfficeLocation String?
   websiteUrl         String?
-  /// true = never apply to this company.
-  blacklisted        Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  jobs Job[]
+  jobs          Job[]
+  blacklistedBy Blacklisted[]
 
   @@map("companies")
 }
 
+/// Companies each user never wants to apply to.
+/// Deleting the user or the company deletes its rows here (onDelete: Cascade).
+model Blacklisted {
+  id        String   @id @default(uuid())
+  userId    String
+  companyId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId])
+  @@map("blacklisted")
+}
+
 // ──────────────────────────────── Jobs ───────────────────────────────
 
+/// Jobs are kept when their user or company is deleted: userId / companyId are
+/// set to NULL (onDelete: SetNull) and companyName keeps the hiring company's name.
 model Job {
   id                String            @id @default(uuid())
-  userId            String
-  companyId         String
+  userId            String?
+  companyId         String?
+  /// Copy of the company name, so the job still shows who was hiring if the company row is deleted.
+  companyName       String
   searchCriteriaId  String?
   /// The job ID from JSearch / SerpApi, used to avoid saving the same job twice.
   externalId        String
@@ -212,9 +232,8 @@ model Job {
   salaryMax         Int?
   salaryCurrency    String?
   salaryPeriod      String?
-  /// Exact posted date when known (SUGGESTED; datePosted is derived from it).
+  /// When the job was posted (null when the search API did not say).
   postedAt          DateTime?
-  datePosted        DatePostedRange   @default(UNKNOWN)
   /// 0-100: how likely the posting is fraudulent.
   fraudRating       Int?
   fraudReason       String?           @db.Text
@@ -228,8 +247,8 @@ model Job {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
-  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  company          Company          @relation(fields: [companyId], references: [id])
+  user             User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  company          Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
   searchCriteria   SearchCriteria?  @relation(fields: [searchCriteriaId], references: [id], onDelete: SetNull)
   applicationFiles ApplicationFile?
 
@@ -242,19 +261,19 @@ model Job {
 // ────────────────────────── Application files ─────────────────────────
 
 model ApplicationFile {
-  id                    String   @id @default(uuid())
-  jobId                 String   @unique
+  id                 String   @id @default(uuid())
+  jobId              String   @unique
   /// Resume used for the application. Defaults to the AI-generated file; the user can change it.
-  resumeLink            String?
-  coverLetterLink       String?
+  resumeLink         String?
+  coverLetterLink    String?
   /// SUGGESTED: originals produced by the AI, kept so the user can switch back.
-  aiResumeLink          String?
-  aiCoverLetterLink     String?
+  aiResumeLink       String?
+  aiCoverLetterLink  String?
   /// SUGGESTED: which base resume was tailored and which keywords were added.
-  baseResumeCategory    String?
-  keywordsUsed          String[]
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  baseResumeCategory String?
+  keywordsUsed       String[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
 

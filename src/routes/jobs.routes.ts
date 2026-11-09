@@ -7,6 +7,7 @@ import { body, params, query, validate } from "../middleware/validate.js";
 import { FileParams, IdParams, JobListQuery, UpdateFilesBody, UpdateJobBody } from "../schemas/index.js";
 import { generateDocuments, scoreJob } from "../services/pipeline.service.js";
 import { autofillStatus, startAutofill } from "../autofill/autofill.service.js";
+import { isBlacklisted } from "../services/blacklist.service.js";
 
 export const jobsRouter = Router();
 
@@ -32,7 +33,7 @@ jobsRouter.get("/", validate({ query: JobListQuery }), async (req, res) => {
   const [items, total] = await Promise.all([
     prisma.job.findMany({
       where,
-      include: { company: { select: { id: true, name: true, blacklisted: true } }, applicationFiles: true },
+      include: { company: { select: { id: true, name: true } }, applicationFiles: true },
       orderBy: [{ matchRating: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
       skip: (q.page - 1) * q.pageSize,
       take: q.pageSize,
@@ -115,7 +116,7 @@ jobsRouter.get("/:id/files/:kind", validate({ params: FileParams }), async (req,
  */
 jobsRouter.post("/:id/autofill", validate({ params: IdParams }), async (req, res) => {
   const job = await ownJob(req.user!.id, params(req, IdParams).id);
-  if (job.company.blacklisted) throw new HttpError(409, "Company is blacklisted");
+  if (await isBlacklisted(req.user!.id, job.companyId)) throw new HttpError(409, "Company is blacklisted");
   if (!job.applicationFiles?.resumeLink) throw new HttpError(409, "Generate documents for this job first");
   const session = await startAutofill(job.id, { userId: req.user!.id, requestId: req.requestId });
   res.status(202).json({

@@ -98,7 +98,8 @@ export const CompanyBody = z.object({
   name: z.string().trim().min(1).max(200),
   headOfficeLocation: z.string().max(200).optional().nullable(),
   websiteUrl: optionalUrl,
-  blacklisted: z.boolean().default(false),
+  /** Adds the company to (true) or removes it from (false) YOUR blacklist. */
+  blacklisted: z.boolean().optional(),
 });
 export const UpdateCompanyBody = CompanyBody.partial();
 export const CompanyQuery = z.object({

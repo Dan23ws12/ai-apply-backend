@@ -50,6 +50,9 @@ export async function searchJobs(criteria: SearchCriteria, ctx: SearchContext) {
   return { provider, totalFound: jobs.length, jobs: filtered };
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_AGE_DAYS = { PAST_WEEK: 7, PAST_2_WEEKS: 14, PAST_MONTH: 30 } as const;
+
 /** Applies the user's criteria that the search APIs cannot filter on. */
 export function applyFilters(jobs: NormalizedJob[], c: SearchCriteria): NormalizedJob[] {
   const include = c.includeKeywords.map((k) => k.toLowerCase());
@@ -68,7 +71,8 @@ export function applyFilters(jobs: NormalizedJob[], c: SearchCriteria): Normaliz
     if (include.length && !include.some((k) => text.includes(k))) return false;
     if (exclude.some((k) => text.includes(k))) return false;
     if (c.minSalary && job.salaryMax && job.salaryPeriod === "YEAR" && job.salaryMax < c.minSalary) return false;
-    if (c.datePosted === "PAST_2_WEEKS" && job.datePosted !== "PAST_WEEK" && job.datePosted !== "PAST_2_WEEKS" && job.datePosted !== "UNKNOWN") return false;
+    // The APIs only filter by week or month, so check the exact age here. Jobs with no date are kept.
+    if (job.postedAt && Date.now() - job.postedAt.getTime() > MAX_AGE_DAYS[c.datePosted] * DAY_MS) return false;
     return true;
   });
 }

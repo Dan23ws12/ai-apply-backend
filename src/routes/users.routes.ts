@@ -65,3 +65,12 @@ usersRouter.delete("/me/credentials", async (req, res) => {
   await prisma.user.update({ where: { id: req.user!.id }, data: { credentials: Prisma.DbNull } });
   res.status(204).end();
 });
+
+/**
+ * Deletes your account. Your profile, saved searches, saved answers and blacklist rows
+ * are deleted with it. Your jobs are kept with userId set to null (application history).
+ */
+usersRouter.delete("/me", async (req, res) => {
+  await prisma.user.delete({ where: { id: req.user!.id } });
+  res.status(204).end();
+});

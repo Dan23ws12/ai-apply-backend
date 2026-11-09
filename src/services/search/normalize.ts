@@ -1,20 +1,6 @@
-import type {
-  DatePostedRange,
-  JobLocationType,
-  JobType,
-  SearchWebsite,
-} from "../../generated/prisma/enums.js";
+import type { JobLocationType, JobType, SearchWebsite } from "../../generated/prisma/enums.js";
 
 const DAY = 24 * 60 * 60 * 1000;
-
-export function datePostedFrom(postedAt: Date | null): DatePostedRange {
-  if (!postedAt) return "UNKNOWN";
-  const age = Date.now() - postedAt.getTime();
-  if (age <= 7 * DAY) return "PAST_WEEK";
-  if (age <= 14 * DAY) return "PAST_2_WEEKS";
-  if (age <= 30 * DAY) return "PAST_MONTH";
-  return "OLDER";
-}
 
 /** Converts "3 days ago" / "2 weeks ago" / "30+ days ago" (SerpApi) to a Date. */
 export function parseRelativeDate(text: string | undefined | null): Date | null {

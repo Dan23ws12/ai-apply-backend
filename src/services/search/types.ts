@@ -25,7 +25,6 @@ export interface NormalizedJob {
   jobType: JobType;
   locationType: JobLocationType;
   postedAt: Date | null;
-  datePosted: DatePostedRange;
   salaryMin: number | null;
   salaryMax: number | null;
   salaryCurrency: string | null;

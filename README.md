@@ -256,11 +256,15 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 |---|---|
 | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` | Account and login |
 | `PATCH /api/users/me` | Change your first or last name |
+| `DELETE /api/users/me` | Delete your account. Your blacklist, profile, saved searches and saved answers are deleted; your jobs are kept. |
 | `GET/PUT /api/users/me/profile` | Details used to fill application forms |
 | `GET/PUT/DELETE /api/users/me/credentials` | Saved LinkedIn/Glassdoor logins (encrypted, never returned) |
 | `GET/POST /api/search-criteria`, `GET/PATCH/DELETE /api/search-criteria/:id` | Saved searches |
 | `POST /api/search-criteria/:id/run` | Run a search now |
-| `GET /api/companies?blacklisted=true&search=`, `POST /api/companies`, `PATCH /api/companies/:id` | Companies. `{"blacklisted":true}` stops all applications to that company. |
+| `GET /api/companies?blacklisted=true&search=`, `POST /api/companies`, `PATCH /api/companies/:id` | Companies. Each one shows `blacklisted` for **your** blacklist; `{"blacklisted":true}` adds it, `false` removes it. |
+| `GET /api/companies/blacklisted` | Your blacklist |
+| `PUT /api/companies/:id/blacklist`, `DELETE /api/companies/:id/blacklist` | Add a company to, or remove it from, your blacklist. Adding it marks your open jobs there as `SKIPPED`. |
+| `DELETE /api/companies/:id` | Delete a company for everyone. Its blacklist rows go with it; its jobs are kept. |
 | `GET /api/jobs?status=&website=&locationType=&minMatch=&maxFraud=&page=` | Your jobs |
 | `GET/PATCH /api/jobs/:id` | Job details. Set the status by hand, e.g. `SAVED`, or `APPLIED` if submission wasn't detected. |
 | `POST /api/jobs/:id/score` | Re-rate the match and fraud risk |
@@ -314,28 +318,38 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 
 | Table | Purpose |
 |---|---|
-| `users` | First name, last name, email, password hash, `credentials` (encrypted JSON of job-site logins), timestamps |
-| `user_profiles` *(suggested)* | Phone, address, links, work authorisation, salary, notice period, extra answers: the data used to fill forms |
-| `search_criteria` *(suggested)* | Saved searches and filters: query, location, date range, job and location types, sites, include/exclude keywords, minimum salary, match/fraud limits |
-| `companies` | Name, head office location (optional), website link, `blacklisted`, timestamps |
-| `jobs` | Position name, hiring company, fraud rating, match rating, location, job type, location type, search website, application status, date posted, created at, application date, application link, plus the extra columns below |
+| `users` | `id` (the user ID), first name, last name, email, password hash, `credentials` (encrypted JSON of job-site logins), timestamps |
+| `user_profiles` | One per user: phone, address, links, work authorisation, salary, notice period, extra answers. This is the data used to fill forms. |
+| `search_criteria` | Saved searches and filters per user: query, location, posted within (past week, 2 weeks or month), job and location types, sites, include/exclude keywords, minimum salary, match/fraud limits |
+| `companies` | Name, head office location (optional), website link, timestamps. Shared by all users. |
+| `blacklisted` | One row per user per company that user never wants to apply to: `userId`, `companyId`, `createdAt`, `updatedAt`. Unique on (`userId`, `companyId`). |
+| `jobs` | `userId`, position name, hiring company (`companyId` + `companyName`), fraud rating, match rating, location, job type, location type, search website, application status, `postedAt` (exact posting date), created at, application date, application link, plus the extra columns below |
 | `application_files` | Related job, resume link, cover letter link (both default to the AI versions and can be changed), timestamps |
-| `application_answers` *(suggested)* | Saved answers to form questions, so the AI is asked each question once and your corrections are reused |
+| `application_answers` | Saved answers to form questions per user, so the AI is asked each question once and your corrections are reused |
 | `audit_logs` | HTTP requests and responses, external API calls, AI calls, auto-fill events, errors |
 
 Every table has `createdAt` and `updatedAt`, except `audit_logs`. Log rows are never edited, so it only has `createdAt`.
+
+### What happens when a user or company is deleted
+
+| Deleted | `blacklisted` rows | `jobs` rows | Other rows |
+|---|---|---|---|
+| A user (`DELETE /api/users/me`) | That user's rows are deleted | **Kept**, with `userId` set to `NULL` | Profile, saved searches and saved answers are deleted; audit logs are kept with `userId` set to `NULL` |
+| A company (`DELETE /api/companies/:id`) | Every user's row for that company is deleted | **Kept**, with `companyId` set to `NULL`. `jobs.companyName` still shows who was hiring. | None |
+
+The database enforces this with foreign keys (`ON DELETE CASCADE` on `blacklisted`, `ON DELETE SET NULL` on `jobs`), so it also applies when rows are deleted outside the app, for example in Prisma Studio. A job with no `userId` no longer appears in anyone's job list; it stays only as history. `application_files` rows stay with their job.
 
 ### Suggestions made in this schema, and why
 
 1. **Separate login data from form data.** Things like phone, address and work authorisation go in `user_profiles`, not `users`. Login data and form answers change at different times, and auth code shouldn't load data it doesn't need.
 2. **Encrypt `users.credentials`.** Job-site passwords are stored with AES-256-GCM, never as plain JSON. A better long-term option is to not store passwords at all and rely on the saved browser profile (option 1 above). You could then remove the column.
-3. **Add a `search_criteria` table.** The job criteria and filters you wanted need somewhere to live, and each job records which search found it (`jobs.searchCriteriaId`).
-4. **Add `jobs.userId`.** Each user has their own job list, because application status, ratings and dates belong to one user's application.
-5. **Add `jobs.externalId` with a unique `(userId, externalId)` key.** This stops the same job being saved twice when a search runs again.
-6. **Store the exact posting date in `jobs.postedAt`.** `datePosted` (past week, 2 weeks or month) is worked out from it. On its own the bucket goes stale: a job "posted this week" is two weeks old next week. Consider dropping `datePosted` later and computing it when you query.
-7. **Add columns to `jobs`:** `description` (needed for AI scoring and documents), `matchReason` and `fraudReason` (explain the ratings), `applyOptions` (every apply link found), salary fields, `provider` (JSearch or SerpApi; this is separate from `searchWebsite`, which is the job board), and `statusMessage` (why a job was skipped or failed).
-8. **Add statuses:** `SKIPPED` (filtered out), `DOCUMENTS_READY` and `FORM_FILLED` (waiting for you to submit), alongside `FOUND`, `INCOMPLETE`, `ERROR`, `SAVED` and `APPLIED`.
-9. **Add columns to `application_files`:** `aiResumeLink` and `aiCoverLetterLink` keep the AI originals so you can switch back, and `baseResumeCategory` and `keywordsUsed` record how each resume was tailored.
-10. **Add a `companies.normalizedName` unique column.** "Acme Inc." and "ACME" become one company, so a blacklist applies to all of its jobs.
-11. **Change later if several people share one install:** move `blacklisted` into a `user_company_preferences (userId, companyId, blacklisted)` table, because one person's blacklist shouldn't affect another's.
+3. **Add a `search_criteria` table.** The job criteria and filters need somewhere to live, and each job records which search found it (`jobs.searchCriteriaId`).
+4. **`jobs.userId`.** Each user has their own job list, because application status, ratings and dates belong to one user's application.
+5. **`jobs.externalId` with a unique (`userId`, `externalId`) key.** This stops the same job being saved twice when a search runs again.
+6. **`jobs.postedAt` instead of a "posted within" column.** A stored bucket goes stale: a job "posted this week" is two weeks old next week. The search filter checks the exact date instead.
+7. **`jobs.companyName`.** Jobs are kept when their company is deleted, so the job keeps a copy of the name.
+8. **Extra columns on `jobs`:** `description` (needed for AI scoring and documents), `matchReason` and `fraudReason` (explain the ratings), `applyOptions` (every apply link found), salary fields, `provider` (JSearch or SerpApi; this is separate from `searchWebsite`, which is the job board), and `statusMessage` (why a job was skipped or failed).
+9. **Extra statuses:** `SKIPPED` (filtered out), `DOCUMENTS_READY` and `FORM_FILLED` (waiting for you to submit), alongside `FOUND`, `INCOMPLETE`, `ERROR`, `SAVED` and `APPLIED`.
+10. **Extra columns on `application_files`:** `aiResumeLink` and `aiCoverLetterLink` keep the AI originals so you can switch back, and `baseResumeCategory` and `keywordsUsed` record how each resume was tailored.
+11. **`companies.normalizedName` (unique).** "Acme Inc." and "ACME" become one company, so a blacklist applies to all of its jobs.
 12. **Audit log upkeep:** the table grows fast. Add a scheduled cleanup, e.g. delete `HTTP_REQUEST`/`HTTP_RESPONSE` rows older than 30 days.

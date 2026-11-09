@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { env } from "../../config/env.js";
 import { auditedFetch } from "../audit.service.js";
 import {
-  datePostedFrom,
   isLikelyCompanySite,
   jobTypeFrom,
   locationTypeFrom,
@@ -105,7 +104,6 @@ function toNormalized(j: SerpJob): NormalizedJob {
     jobType: jobTypeFrom(j.detected_extensions?.schedule_type),
     locationType: locationTypeFrom(j.detected_extensions?.work_from_home ?? null, `${j.title} ${j.location ?? ""} ${j.description ?? ""}`),
     postedAt,
-    datePosted: datePostedFrom(postedAt),
     ...salary,
     applyOptions: options,
   };

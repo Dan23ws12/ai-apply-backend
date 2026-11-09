@@ -4,6 +4,7 @@ import { HttpError, notFound } from "../lib/errors.js";
 import { aiClient } from "./ai.client.js";
 import { audit } from "./audit.service.js";
 import { jobForAi, loadApplicant } from "./applicant.service.js";
+import { blacklistedCompanyIds, isBlacklisted } from "./blacklist.service.js";
 import { pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
 import { normalizeCompanyName } from "./search/normalize.js";
 
@@ -22,6 +23,7 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
 
   const { provider, totalFound, jobs } = await searchJobs(criteria, ctx);
   const newJobIds: string[] = [];
+  const blacklist = await blacklistedCompanyIds(ctx.userId);
 
   for (const j of jobs) {
     const normalizedName = normalizeCompanyName(j.companyName) || j.companyName.toLowerCase();
@@ -40,11 +42,13 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
     const apply = pickApplyOption(j.applyOptions, criteria.websites);
     if (!apply) continue;
     const listedOn = j.applyOptions.find((o) => criteria.websites.includes(o.website)) ?? apply;
+    const blacklisted = blacklist.has(company.id);
 
     const job = await prisma.job.create({
       data: {
         userId: ctx.userId,
         companyId: company.id,
+        companyName: company.name,
         searchCriteriaId: criteria.id,
         externalId: j.externalId,
         provider: j.provider,
@@ -61,12 +65,11 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
         salaryCurrency: j.salaryCurrency,
         salaryPeriod: j.salaryPeriod,
         postedAt: j.postedAt,
-        datePosted: j.datePosted,
-        applicationStatus: company.blacklisted ? "SKIPPED" : "FOUND",
-        statusMessage: company.blacklisted ? "Company is blacklisted" : null,
+        applicationStatus: blacklisted ? "SKIPPED" : "FOUND",
+        statusMessage: blacklisted ? "Company is blacklisted" : null,
       },
     });
-    if (!company.blacklisted) newJobIds.push(job.id);
+    if (!blacklisted) newJobIds.push(job.id);
   }
 
   await prisma.searchCriteria.update({ where: { id: criteria.id }, data: { lastRunAt: new Date() } });
@@ -128,7 +131,7 @@ export async function generateDocuments(
 ) {
   const job = await prisma.job.findFirst({ where: { id: jobId, userId: ctx.userId }, include: { company: true } });
   if (!job) throw notFound("Job");
-  if (job.company.blacklisted) throw new HttpError(409, "Company is blacklisted");
+  if (await isBlacklisted(ctx.userId, job.companyId)) throw new HttpError(409, "Company is blacklisted");
 
   const score = scored ?? (await scoreJob(jobId, ctx));
   const applicant = await loadApplicant(ctx.userId);

@@ -1,7 +1,6 @@
 import { env } from "../../config/env.js";
 import { auditedFetch } from "../audit.service.js";
 import {
-  datePostedFrom,
   jobTypeFrom,
   locationTypeFrom,
   websiteFrom,
@@ -91,7 +90,6 @@ export async function searchJSearch(params: SearchParams, ctx: SearchContext): P
       jobType: jobTypeFrom(j.job_employment_type),
       locationType: locationTypeFrom(j.job_is_remote, `${j.job_title} ${j.job_description ?? ""}`),
       postedAt,
-      datePosted: datePostedFrom(postedAt),
       salaryMin: j.job_min_salary ?? null,
       salaryMax: j.job_max_salary ?? null,
       salaryCurrency: j.job_salary_currency ?? null,
