@@ -140,3 +140,16 @@ export const AuditQuery = z.object({
   requestId: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
+
+// ── application log (Excel) ──
+const IsoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use the format YYYY-MM-DD")
+  .refine((v) => {
+    const [y, m, d] = v.split("-").map(Number) as [number, number, number];
+    const dt = new Date(y, m - 1, d);
+    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+  }, "Not a real date");
+/** date = the day you applied (local time). Leave it out for today. */
+export const ApplicationLogBody = z.object({ date: IsoDate.optional() });
+export const ApplicationLogQuery = z.object({ date: IsoDate.optional() });

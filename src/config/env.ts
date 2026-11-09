@@ -30,6 +30,9 @@ const EnvSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   AUTOFILL_WATCH_MINUTES: z.coerce.number().int().positive().default(20),
+
+  /** Excel workbook that POST /api/application-logs writes applied jobs to. Relative paths start at the backend folder. */
+  APPLICATION_LOG_PATH: z.string().default("../docs/AI Job Application Logs.xlsx"),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

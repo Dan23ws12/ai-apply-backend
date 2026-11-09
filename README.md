@@ -1,6 +1,6 @@
 # AI Job Apply
 
-AI Job Apply finds jobs that match your search criteria and filters, rates each one for fit and for fraud risk, and writes a tailored resume and cover letter for the good matches. It then opens the application form in a visible browser and fills it in for you.
+AI Job Apply finds jobs that match your search criteria and filters, rates each one for fraud risk and then for fit (two independent ratings), and writes a tailored resume and cover letter for the good matches. It then opens the application form in a visible browser and fills it in for you.
 
 **The app never submits an application.** It fills in the form, and you check the answers and click **Submit** yourself. This keeps automated actions off your LinkedIn and Glassdoor accounts, which is what gets accounts restricted or banned, and it stops wrong answers from being sent without anyone seeing them.
 
@@ -12,7 +12,10 @@ Search criteria ──► JSearch (SerpApi Google Jobs if JSearch fails)
                     keywords, salary, blacklisted companies, duplicates
                      │
                      ▼
-            Claude: match rating + fraud rating ──► below your limits → SKIPPED
+            1. Fraud likelihood rating (1-100) ──► 80 or more → SKIPPED, no match rating
+                     │
+                     ▼
+            2. Job match rating (1-100), worked out separately ──► outside your limits → SKIPPED
                      │
                      ▼
             Claude: tailored resume (.docx) + cover letter (.docx)
@@ -22,6 +25,9 @@ Search criteria ──► JSearch (SerpApi Google Jobs if JSearch fails)
                      │
                      ▼
             YOU review and click Submit ──► job marked APPLIED
+                     │
+                     ▼
+            POST /api/application-logs ──► row added to docs/AI Job Application Logs.xlsx
 ```
 
 ---
@@ -49,7 +55,7 @@ Everything sits in the repository root, next to the existing skills, references 
 ```
 AI Job Apply Project/
 ├── README.md
-├── .agents/skills/           # Existing resume and fraud-check skills (read by the AI)
+├── .agents/skills/           # Resume skills and the job-post-evaluation skill (fraud + match rules)
 ├── shared-references/        # Existing format rules and extended skills lists (read by the AI)
 ├── resumes/
 │   ├── base resumes/         # Your base resumes (copied, never changed)
@@ -87,7 +93,9 @@ AI Job Apply Project/
 │   ├── requirements.txt
 │   ├── .env.example
 │   └── app/
-│       ├── main.py           # FastAPI endpoints: /score /documents /answers /health
+│       ├── main.py           # FastAPI endpoints: /evaluate/fraud /evaluate/match /documents /answers /health
+│       ├── fraud.py          # Fraud likelihood rating: script checks + AI (with LinkedIn web search) + score
+│       ├── match.py          # Job match rating: AI judgments + scoring script (no fraud input)
 │       ├── ai.py             # All Claude calls (structured JSON outputs)
 │       ├── documents.py      # Edits a copy of the base resume and writes the cover letter
 │       ├── references.py     # Loads the repo's resume skills, reference files and base resumes
@@ -104,7 +112,7 @@ The Python service reuses files that already exist in this repository:
 | Repo file | Used for |
 |---|---|
 | `.agents/skills/*-resume-guidance/SKILL.md` | Rules for tailoring each type of resume |
-| `.agents/skills/fraud-likelihood-evaluation/SKILL.md` | Fraud rating instructions |
+| `.agents/skills/job-post-evaluation/SKILL.md` | Fraud likelihood and job match rating rules (mirrored in `fraud.py` and `match.py`) |
 | `shared-references/format.md`, `skill-positional-guidance.md` | Resume format and where each skill goes |
 | `shared-references/*-skills-and-tools.md` | Extended skills lists, used for match ratings and keywords |
 | `resumes/base resumes/*.docx` | Base resumes. They're only ever copied, never changed. |
@@ -267,7 +275,9 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `DELETE /api/companies/:id` | Delete a company for everyone. Its blacklist rows go with it; its jobs are kept. |
 | `GET /api/jobs?status=&website=&locationType=&minMatch=&maxFraud=&page=` | Your jobs |
 | `GET/PATCH /api/jobs/:id` | Job details. Set the status by hand, e.g. `SAVED`, or `APPLIED` if submission wasn't detected. |
-| `POST /api/jobs/:id/score` | Re-rate the match and fraud risk |
+| `POST /api/jobs/:id/evaluate` | Re-run the evaluation: fraud likelihood rating first, then the match rating unless fraud is 80 or more |
+| `GET /api/application-logs?date=YYYY-MM-DD` | Preview the jobs you applied to on a date (default today); nothing is written |
+| `POST /api/application-logs` with `{"date":"YYYY-MM-DD"}` | Write the jobs you applied to on that date (default today) to the Excel log. Running it again updates those rows. |
 | `POST /api/jobs/:id/documents` | Generate or regenerate the resume and cover letter |
 | `GET/PATCH /api/jobs/:id/files` | See or change which resume/cover letter the job uses. `null` switches back to the AI version. |
 | `GET /api/jobs/:id/files/resume`, `.../files/cover-letter` | Download a document |
@@ -283,8 +293,17 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 - **Lower ban risk.** With `PREFER_DIRECT_APPLY=true` (the default), the app opens the company's own careers page when JSearch provides one. That keeps automation off LinkedIn and Glassdoor completely. Easy Apply forms are still filled in your logged-in session, which LinkedIn's terms don't allow, so the risk is lower but not zero.
 - **When an application counts as applied.** When a "thank you for applying" or "application submitted" page appears after you submit, the job is marked `APPLIED` with today's date. If that isn't detected, use `PATCH /api/jobs/:id` with `{"applicationStatus":"APPLIED"}`.
 - **Check the AI's answers.** Answers the AI wasn't sure about are filled in but not saved for reuse, so look closely at free-text questions. Voluntary demographic questions get the "decline to answer" option when the form has one.
-- **The fraud rating is a guide.** It's based only on the posting text, company name and links. The AI doesn't browse the web here. Always check a company before you send personal details.
-- **Costs.** Each new job uses one JSearch request, one Claude scoring call, and two Claude calls for the resume and cover letter if it passes your limits. Use `maxResults`, `minMatchRating` and the `AI_EFFORT_*` settings to control spending.
+- **Two independent ratings, fraud first.**
+  - **Fraud likelihood rating** (1–100, higher = more likely a scam). Python checks the posting site (HTTPS, whether it loads, company domain or known job board), whether the company name matches its website, and red-flag wording. One Claude call then searches for the company on LinkedIn with web search, confirms or rejects those findings, and explains them. Python turns the confirmed red flags into the rating (critical 45, high 25, medium 10, low 4 points; any critical flag means at least 80).
+  - **At 80 or more**, the match rating is skipped, the job is marked `SKIPPED`, and documents and auto-fill are blocked.
+  - **Job match rating** (1–100, higher = better fit): a separate Claude call that never sees the fraud result, scored by Python with the skill's 40/30/10/10/10 rules.
+  - **Your search limits** (`minMatchRating`, `maxFraudRating`) then decide which jobs get documents. The ratings themselves never affect each other.
+  - **The fraud rating is still a guide.** Check a company yourself before you send personal details.
+- **The application log** (`APPLICATION_LOG_PATH`, default `../docs/AI Job Application Logs.xlsx`) lists only jobs marked `APPLIED` that had a resume made. Saved, skipped, failed and unfinished applications are left out.
+  - **Columns:** date applied, position, company, location, location type, job type, found on, match rating, application link, resume and cover letter (clickable links to the files), and Job ID (used to update a row instead of duplicating it).
+  - **Left out:** fraud rating, user ID and the job's posting date.
+  - **Close the file in Excel** before calling the endpoint, or it returns `423`.
+- **Costs.** Each new job uses one JSearch request, one Claude fraud call (with up to `FRAUD_MAX_SEARCHES` web searches at about $0.01 each), one Claude match call unless the fraud rating is 80 or more, and two Claude calls for the resume and cover letter if it passes your limits. Use `maxResults`, `minMatchRating` and the `AI_EFFORT_*` settings to control spending.
 - **Audit logs** record requests, responses, API calls, AI calls, auto-fill events and errors. Passwords, tokens, API keys and cookies are replaced with `[REDACTED]` before they're saved.
 
 ---
@@ -296,8 +315,11 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | How resumes are tailored (tone, keyword placement, which sections change) | Edit the repo's `.agents/skills/*-resume-guidance/SKILL.md` and `shared-references/*.md`. No code changes needed. |
 | Base resume used for each track | Update the `resumes/base resumes/...docx` path in that track's `SKILL.md`. The app reads the path from there and otherwise falls back to the highest version number. |
 | Extended skills lists | `shared-references/*-skills-and-tools.md` |
-| Fraud check rules | `.agents/skills/fraud-likelihood-evaluation/SKILL.md` and the fraud signs in `python-service/app/ai.py` (`score_job`) |
-| Claude model and effort | `python-service/.env`: `AI_MODEL`, `AI_EFFORT_SCORING`, `AI_EFFORT_DOCUMENTS`, `AI_EFFORT_ANSWERS` |
+| Fraud check rules | `.agents/skills/job-post-evaluation/SKILL.md` (for you and agents) and `python-service/app/fraud.py` (`RULES`, `TEXT_PATTERNS`, `POINTS`, `KNOWN_SITES`) for the app |
+| Match rating rules | The same skill and `python-service/app/match.py` (`RULES`, `score()`) |
+| Turn the LinkedIn web search on or off | `FRAUD_WEB_SEARCH` and `FRAUD_MAX_SEARCHES` in `python-service/.env` |
+| Where the application log is written | `APPLICATION_LOG_PATH` in `.env` |
+| Claude model and effort | `python-service/.env`: `AI_MODEL` (default), `AI_MODEL_FRAUD` / `AI_EFFORT_FRAUD`, `AI_MODEL_MATCH` / `AI_EFFORT_MATCH`, `AI_EFFORT_DOCUMENTS`, `AI_EFFORT_ANSWERS` |
 | Cover letter style | The `cover_letter()` prompt in `python-service/app/ai.py` |
 | Cover letter header and layout | `write_cover_letter()` in `python-service/app/documents.py`. The header (name and contact line) is copied from the tailored resume, so editing your base resume's header changes it in every new letter. The code always adds the date, recipient block, `Re:` line, greeting and signature; the AI writes only the body. |
 | Where resumes and cover letters are saved | `RESUME_OUTPUT_DIR` and `COVER_LETTER_OUTPUT_DIR` in `python-service/.env` (defaults: `resumes/jb resumes` and `cover-letters`) |
@@ -348,7 +370,7 @@ The database enforces this with foreign keys (`ON DELETE CASCADE` on `blackliste
 5. **`jobs.externalId` with a unique (`userId`, `externalId`) key.** This stops the same job being saved twice when a search runs again.
 6. **`jobs.postedAt` instead of a "posted within" column.** A stored bucket goes stale: a job "posted this week" is two weeks old next week. The search filter checks the exact date instead.
 7. **`jobs.companyName`.** Jobs are kept when their company is deleted, so the job keeps a copy of the name.
-8. **Extra columns on `jobs`:** `description` (needed for AI scoring and documents), `matchReason` and `fraudReason` (explain the ratings), `applyOptions` (every apply link found), salary fields, `provider` (JSearch or SerpApi; this is separate from `searchWebsite`, which is the job board), and `statusMessage` (why a job was skipped or failed).
+8. **Extra columns on `jobs`:** `description` (needed for AI scoring and documents), `matchReason` and `fraudReason` (explain the ratings), `applyOptions` (every apply link found), salary fields, `provider` (JSearch or SerpApi; this is separate from `searchWebsite`, which is the job board), `statusMessage` (why a job was skipped or failed), and `fraudDetails` / `matchDetails` (red flags and checks; chosen resume track, keywords and part scores). `fraudRating`, `matchRating` and both detail columns are optional: `matchRating` stays empty when the fraud rating is 80 or more.
 9. **Extra statuses:** `SKIPPED` (filtered out), `DOCUMENTS_READY` and `FORM_FILLED` (waiting for you to submit), alongside `FOUND`, `INCOMPLETE`, `ERROR`, `SAVED` and `APPLIED`.
 10. **Extra columns on `application_files`:** `aiResumeLink` and `aiCoverLetterLink` keep the AI originals so you can switch back, and `baseResumeCategory` and `keywordsUsed` record how each resume was tailored.
 11. **`companies.normalizedName` (unique).** "Acme Inc." and "ACME" become one company, so a blacklist applies to all of its jobs.
