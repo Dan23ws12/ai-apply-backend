@@ -1,2 +1,16 @@
 pvenv/
 __pycache__/
+
+# Node
+node_modules
+dist
+/src/generated/prisma
+
+# Secrets
+.env
+
+# Python service virtual environment
+python-service/.venv/
+
+# Playwright browser profiles and other runtime data
+storage/
