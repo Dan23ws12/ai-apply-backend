@@ -4,74 +4,90 @@ import { existsSync } from "node:fs";
 import { prisma } from "../lib/prisma.js";
 import { HttpError, notFound } from "../lib/errors.js";
 import { body, params, query, validate } from "../middleware/validate.js";
-import { FileParams, IdParams, JobListQuery, UpdateFilesBody, UpdateJobBody } from "../schemas/index.js";
+import { EvaluateQuery, FileParams, IdParams, JobListQuery, UpdateFilesBody, UpdateJobBody } from "../schemas/index.js";
 import { SKIP_MATCH_FRAUD_RATING, evaluateJob, generateDocuments } from "../services/pipeline.service.js";
 import { autofillStatus, startAutofill } from "../autofill/autofill.service.js";
 import { isBlacklisted } from "../services/blacklist.service.js";
+import { jobInclude, ownApplication, setStatus, toJobView } from "../services/jobs.service.js";
+import type { Prisma } from "../generated/prisma/client.js";
 
+/**
+ * "Jobs" in the API are applications (one user's application to one posting), returned
+ * flattened with their posting's details. The id is the application id.
+ */
 export const jobsRouter = Router();
 
+/** The user's job as the flat API view, or 404. */
 async function ownJob(userId: string, id: string) {
-  const job = await prisma.job.findFirst({
-    where: { id, userId },
-    include: { company: true, applicationFiles: true },
-  });
-  if (!job) throw notFound("Job");
-  return job;
+  return toJobView(await ownApplication(userId, id));
 }
 
 jobsRouter.get("/", validate({ query: JobListQuery }), async (req, res) => {
   const q = query(req, JobListQuery);
-  const where = {
+  const where: Prisma.ApplicationWhereInput = {
     userId: req.user!.id,
     applicationStatus: q.status,
     searchWebsite: q.website,
-    locationType: q.locationType,
     matchRating: q.minMatch !== undefined ? { gte: q.minMatch } : undefined,
-    fraudRating: q.maxFraud !== undefined ? { lte: q.maxFraud } : undefined,
+    posting: {
+      locationType: q.locationType,
+      fraudRating: q.maxFraud !== undefined ? { lte: q.maxFraud } : undefined,
+    },
   };
-  const [items, total] = await Promise.all([
-    prisma.job.findMany({
+  const [rows, total] = await Promise.all([
+    prisma.application.findMany({
       where,
-      include: { company: { select: { id: true, name: true } }, applicationFiles: true },
+      include: { ...jobInclude, posting: { ...jobInclude.posting, omit: { description: true } } },
       orderBy: [{ matchRating: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
       skip: (q.page - 1) * q.pageSize,
       take: q.pageSize,
-      omit: { description: true },
     }),
-    prisma.job.count({ where }),
+    prisma.application.count({ where }),
   ]);
+  const items = rows.map((r) => toJobView({ ...r, posting: { ...r.posting, description: null } }, { withDescription: false }));
   res.json({ items, total, page: q.page, pageSize: q.pageSize });
 });
 
 jobsRouter.get("/:id", validate({ params: IdParams }), async (req, res) => {
-  res.json({ item: await ownJob(req.user!.id, params(req, IdParams).id) });
+  res.json({ item: toJobView(await ownApplication(req.user!.id, params(req, IdParams).id)) });
+});
+
+/** Status history of the job, oldest first (e.g. FOUND -> SAVED -> APPLIED). */
+jobsRouter.get("/:id/history", validate({ params: IdParams }), async (req, res) => {
+  const app = await ownApplication(req.user!.id, params(req, IdParams).id);
+  const items = await prisma.applicationStatusEvent.findMany({
+    where: { applicationId: app.id },
+    orderBy: { createdAt: "asc" },
+    select: { fromStatus: true, toStatus: true, message: true, createdAt: true },
+  });
+  res.json({ items });
 });
 
 /** Change the status by hand, e.g. SAVED, or APPLIED after you submit. */
 jobsRouter.patch("/:id", validate({ params: IdParams, body: UpdateJobBody }), async (req, res) => {
   const { id } = params(req, IdParams);
-  await ownJob(req.user!.id, id);
+  const app = await ownApplication(req.user!.id, id);
   const data = body(req, UpdateJobBody);
-  const item = await prisma.job.update({
-    where: { id },
-    data: {
-      ...data,
-      applicationDate: data.applicationStatus === "APPLIED" ? new Date() : undefined,
-    },
+  const status = data.applicationStatus ?? app.applicationStatus;
+  await setStatus(id, status, {
+    statusMessage: data.statusMessage,
+    applicationDate: data.applicationStatus === "APPLIED" ? new Date() : undefined,
   });
-  res.json({ item });
+  res.json({ item: toJobView(await ownApplication(req.user!.id, id)) });
 });
 
 /**
  * Re-runs the evaluation: fraud likelihood rating first, then (unless fraud >= 80)
  * the job match rating. The two ratings are worked out independently.
+ * Cached ratings are reused; add ?refresh=true to ask the AI again (costs an AI call).
  */
-jobsRouter.post("/:id/evaluate", validate({ params: IdParams }), async (req, res) => {
+jobsRouter.post("/:id/evaluate", validate({ params: IdParams, query: EvaluateQuery }), async (req, res) => {
   const { id } = params(req, IdParams);
+  const { refresh } = query(req, EvaluateQuery);
   await ownJob(req.user!.id, id);
-  const { fraud, match } = await evaluateJob(id, { userId: req.user!.id, requestId: req.requestId });
+  const { fraud, match, cached } = await evaluateJob(id, { userId: req.user!.id, requestId: req.requestId }, { refresh });
   res.json({
+    cached,
     fraud: { rating: fraud.fraud_rating, reasoning: fraud.reasoning, redFlags: fraud.red_flags, checks: fraud.checks },
     match: match
       ? { rating: match.match_rating, reasoning: match.reasoning, resumeCategory: match.resume_category, keywords: match.keywords }
@@ -101,7 +117,7 @@ jobsRouter.patch("/:id/files", validate({ params: IdParams, body: UpdateFilesBod
     }
   }
   const files = await prisma.applicationFile.update({
-    where: { jobId: job.id },
+    where: { applicationId: job.id },
     data: {
       resumeLink: data.resumeLink === null ? job.applicationFiles.aiResumeLink : data.resumeLink,
       coverLetterLink: data.coverLetterLink === null ? job.applicationFiles.aiCoverLetterLink : data.coverLetterLink,

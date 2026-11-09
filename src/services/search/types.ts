@@ -39,7 +39,24 @@ export interface SearchParams {
   datePosted: DatePostedRange;
   remoteOnly: boolean;
   jobTypes: JobType[];
-  maxResults: number;
+}
+
+/** Which result pages to ask for. One page is about 10 jobs, and each page costs API quota. */
+export interface PageRequest {
+  /** First page to fetch, starting at 1 (JSearch). */
+  page: number;
+  /** How many pages to fetch in this call. */
+  pages: number;
+  /** SerpApi token for the page after the ones already fetched. */
+  token?: string | null;
+}
+
+export interface ProviderPage {
+  jobs: NormalizedJob[];
+  /** False when the provider has no more results for this search. */
+  hasMore: boolean;
+  /** SerpApi only: token for the next page. */
+  nextPageToken?: string | null;
 }
 
 export interface SearchContext {

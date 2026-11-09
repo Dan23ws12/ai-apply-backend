@@ -11,6 +11,7 @@ import { audit } from "../services/audit.service.js";
 import { jobForAi, loadApplicant } from "../services/applicant.service.js";
 import { getUserCredentials, type SiteLogin } from "../services/credentials.service.js";
 import { markError } from "../services/pipeline.service.js";
+import { jobInclude, setStatus } from "../services/jobs.service.js";
 import { detectFields, type DetectedField } from "./fieldDetector.js";
 import { fileKind, profileValue } from "./profileMapper.js";
 
@@ -67,11 +68,9 @@ export async function startAutofill(jobId: string, ctx: Ctx) {
   if (sessions.get(jobId) && !sessions.get(jobId)!.stopped) {
     throw new HttpError(409, "Auto-fill is already running for this job");
   }
-  const job = await prisma.job.findFirst({
-    where: { id: jobId, userId: ctx.userId },
-    include: { company: true, applicationFiles: true },
-  });
+  const job = await prisma.application.findFirst({ where: { id: jobId, userId: ctx.userId }, include: jobInclude });
   if (!job) throw notFound("Job");
+  const applicationLink = job.applyOption.url;
 
   const applicant = await loadApplicant(ctx.userId);
   const credentials = await getUserCredentials(ctx.userId);
@@ -82,22 +81,19 @@ export async function startAutofill(jobId: string, ctx: Ctx) {
 
   const context = await getContext(ctx.userId);
   const page = await context.newPage();
-  await page.goto(job.applicationLink, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.goto(applicationLink, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
   const session: Session = { jobId, page, startedAt: new Date(), filledFields: 0, stopped: false };
   sessions.set(jobId, session);
   page.on("close", () => (session.stopped = true));
 
-  await prisma.job.update({
-    where: { id: jobId },
-    data: { applicationStatus: "INCOMPLETE", statusMessage: "Auto-fill in progress" },
-  });
-  audit({ type: "AUTOFILL", userId: ctx.userId, requestId: ctx.requestId, url: job.applicationLink, message: `start job ${jobId}` });
+  await setStatus(jobId, "INCOMPLETE", { statusMessage: "Auto-fill in progress" });
+  audit({ type: "AUTOFILL", userId: ctx.userId, requestId: ctx.requestId, url: applicationLink, message: `start job ${jobId}` });
 
   // Run the fill loop in the background; the HTTP request returns right away.
   void fillLoop(session, { job: jobForAi(job), applicant, credentials, files }, ctx);
 
-  return { jobId, url: job.applicationLink, startedAt: session.startedAt };
+  return { jobId, url: applicationLink, startedAt: session.startedAt };
 }
 
 export function autofillStatus(jobId: string) {
@@ -125,10 +121,7 @@ async function fillLoop(session: Session, inputs: FillInputs, ctx: Ctx) {
       // Only checked after we filled something, so a job description can't trigger it.
       const bodyText = markedFilled ? await page.locator("body").innerText({ timeout: 5000 }).catch(() => "") : "";
       if (markedFilled && SUBMITTED_TEXT.test(bodyText)) {
-        await prisma.job.update({
-          where: { id: session.jobId },
-          data: { applicationStatus: "APPLIED", applicationDate: new Date(), statusMessage: "Submitted by user" },
-        });
+        await setStatus(session.jobId, "APPLIED", { applicationDate: new Date(), statusMessage: "Submitted by user" });
         audit({ type: "AUTOFILL", userId: ctx.userId, url: page.url(), message: `job ${session.jobId} submitted by user` });
         break;
       }
@@ -145,10 +138,7 @@ async function fillLoop(session: Session, inputs: FillInputs, ctx: Ctx) {
 
       if (session.filledFields > 0 && !markedFilled) {
         markedFilled = true;
-        await prisma.job.update({
-          where: { id: session.jobId },
-          data: { applicationStatus: "FORM_FILLED", statusMessage: "Form filled. Review it and submit it yourself." },
-        });
+        await setStatus(session.jobId, "FORM_FILLED", { statusMessage: "Form filled. Review it and submit it yourself." });
       }
       await new Promise((r) => setTimeout(r, POLL_MS));
     }

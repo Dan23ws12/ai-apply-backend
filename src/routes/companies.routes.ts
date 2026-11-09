@@ -77,7 +77,7 @@ companiesRouter.delete("/:id/blacklist", validate({ params: IdParams }), async (
 
 /**
  * Deletes a company. Its rows in "blacklisted" are deleted with it (cascade).
- * Jobs at the company are kept: their companyId becomes null and companyName keeps the name.
+ * Postings (and so jobs) at the company are kept: their companyId becomes null and companyName keeps the name.
  */
 companiesRouter.delete("/:id", validate({ params: IdParams }), async (req, res) => {
   const { count } = await prisma.company.deleteMany({ where: { id: params(req, IdParams).id } });

@@ -3,8 +3,9 @@ import { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { encryptJson } from "../lib/crypto.js";
 import { body, validate } from "../middleware/validate.js";
-import { CredentialsBody, ProfileBody, UpdateUserBody } from "../schemas/index.js";
+import { CredentialsBody, ProfileBody, UpdateUserBody, UserSettingsBody } from "../schemas/index.js";
 import { getUserCredentials } from "../services/credentials.service.js";
+import { getUserSettings, updateUserSettings } from "../services/settings.service.js";
 
 export const usersRouter = Router();
 
@@ -37,6 +38,16 @@ usersRouter.put("/me/profile", validate({ body: ProfileBody }), async (req, res)
     update: { ...rest, extraAnswers: json },
   });
   res.json({ profile });
+});
+
+// ── App settings (job search: jobs per search, pages per API call) ──
+usersRouter.get("/me/settings", async (req, res) => {
+  res.json({ settings: await getUserSettings(req.user!.id) });
+});
+
+/** Partial update: send only the settings you want to change. */
+usersRouter.patch("/me/settings", validate({ body: UserSettingsBody }), async (req, res) => {
+  res.json({ settings: await updateUserSettings(req.user!.id, body(req, UserSettingsBody)) });
 });
 
 // ── Job-site credentials (encrypted, write-only) ──

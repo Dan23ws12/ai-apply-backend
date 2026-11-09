@@ -1,57 +1,233 @@
+import { createHash } from "node:crypto";
 import { env } from "../../config/env.js";
 import { HttpError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
-import type { SearchCriteria, SearchWebsite } from "../../generated/prisma/client.js";
+import { prisma } from "../../lib/prisma.js";
+import type { SearchCache, SearchCriteria, SearchProvider, SearchWebsite } from "../../generated/prisma/client.js";
 import { searchJSearch } from "./jsearch.provider.js";
 import { searchSerpApi } from "./serpapi.provider.js";
-import { ProviderError, type ApplyOption, type NormalizedJob, type SearchContext } from "./types.js";
+import {
+  ProviderError,
+  type ApplyOption,
+  type NormalizedJob,
+  type PageRequest,
+  type ProviderPage,
+  type SearchContext,
+  type SearchParams,
+} from "./types.js";
+
+/** Where the jobs of one search run came from. */
+export type SearchSource = "api" | "cache" | "cache+api";
+
+export interface SearchOutcome {
+  provider: SearchProvider;
+  source: SearchSource;
+  apiCalled: boolean;
+  /** Open jobs for this search before the run (see SEARCH_REFRESH_THRESHOLD). Null on a cache miss. */
+  openJobs: number | null;
+  /** Jobs held for this search (all cached pages), before the user's filters. */
+  totalFound: number;
+  /** Jobs that pass the user's filters. The caller drops ones the user already has. */
+  jobs: NormalizedJob[];
+  /** Set when a top-up call failed and cached jobs were used instead. */
+  warning?: string;
+}
+
+export interface SearchOptions {
+  /** Pages one API call asks for (user_settings.pagesPerSearch). */
+  pages: number;
+  /**
+   * Counts the jobs still open for this user and search: cached jobs the user does not
+   * have yet, plus saved jobs that are not applied, skipped or failed.
+   * Receives the cached jobs that pass the user's filters.
+   */
+  countOpenJobs: (matching: NormalizedJob[]) => Promise<number>;
+}
 
 /**
- * Runs a search with JSearch first and falls back to SerpApi Google Jobs when
- * JSearch is not configured, out of quota, down, or returns nothing.
+ * Finds jobs for a saved search, calling the search APIs as little as possible:
+ *
+ * 1. No cached entry (or it expired after SEARCH_CACHE_TTL_HOURS): call the API for
+ *    `pages` pages from page 1 and cache the result.
+ * 2. Cached entry and at least SEARCH_REFRESH_THRESHOLD open jobs: no API call.
+ * 3. Cached entry and fewer open jobs: fetch the NEXT `pages` pages (asking for page 1
+ *    again would only return the jobs already cached) and add them to the entry. Stops
+ *    when the provider runs out of pages or SEARCH_CACHE_MAX_PAGES is reached.
+ *
+ * Cached entries are shared by all users, because job postings are public.
  */
-export async function searchJobs(criteria: SearchCriteria, ctx: SearchContext) {
-  const params = {
-    query: criteria.query,
-    location: criteria.location,
-    country: criteria.country,
-    datePosted: criteria.datePosted,
-    remoteOnly: criteria.locationTypes.length === 1 && criteria.locationTypes[0] === "REMOTE",
-    jobTypes: criteria.jobTypes,
-    // Ask for extra results because the filters below remove some.
-    maxResults: Math.min(criteria.maxResults * 2, 50),
-  };
+export async function searchJobs(criteria: SearchCriteria, ctx: SearchContext, opts: SearchOptions): Promise<SearchOutcome> {
+  const { key, params } = searchKey(criteria);
+  return withKeyLock(key, async (): Promise<SearchOutcome> => {
+    const found = await prisma.searchCache.findUnique({ where: { cacheKey: key } });
+    const entry = found && found.expiresAt > new Date() ? found : null;
 
+    if (!entry) {
+      const page = await fetchWithFallback(params, { page: 1, pages: opts.pages }, ctx);
+      const jobs = dedupe(page.jobs);
+      const data = cacheData(page, jobs, opts.pages);
+      await prisma.searchCache.upsert({
+        where: { cacheKey: key },
+        create: { cacheKey: key, params: params as object, ...data, apiCalls: 1, expiresAt: expiry() },
+        update: { params: params as object, ...data, apiCalls: { increment: 1 }, hitCount: 0, expiresAt: expiry() },
+      });
+      return {
+        provider: page.provider,
+        source: "api",
+        apiCalled: true,
+        openJobs: null,
+        totalFound: jobs.length,
+        jobs: applyFilters(jobs, criteria),
+      };
+    }
+
+    const cached = readCachedJobs(entry);
+    const matching = applyFilters(cached, criteria);
+    const openJobs = await opts.countOpenJobs(matching);
+    const roomLeft = env.SEARCH_CACHE_MAX_PAGES - entry.pagesFetched;
+    const fromCache = (warning?: string): SearchOutcome => ({
+      provider: entry.provider,
+      source: "cache",
+      apiCalled: false,
+      openJobs,
+      totalFound: cached.length,
+      jobs: matching,
+      ...(warning ? { warning } : {}),
+    });
+
+    if (openJobs >= env.SEARCH_REFRESH_THRESHOLD || entry.exhausted || roomLeft <= 0) {
+      await prisma.searchCache.update({ where: { id: entry.id }, data: { hitCount: { increment: 1 } } });
+      return fromCache();
+    }
+
+    // Top up with the next pages from the same provider, so page numbers / tokens line up.
+    const pages = Math.min(opts.pages, roomLeft);
+    let page: ProviderPage;
+    try {
+      page = await fetchFrom(entry.provider, params, { page: entry.pagesFetched + 1, pages, token: entry.nextPageToken }, ctx);
+    } catch (err) {
+      const message = (err as Error).message;
+      logger.warn({ err: message, key }, "Search top-up failed; using cached jobs");
+      return fromCache(`Could not fetch more jobs (${message}); showing cached jobs only`);
+    }
+    const jobs = dedupe([...cached, ...page.jobs]);
+    await prisma.searchCache.update({
+      where: { id: entry.id },
+      data: {
+        jobs: jobs as unknown as object[],
+        pagesFetched: { increment: pages },
+        nextPageToken: page.nextPageToken ?? null,
+        exhausted: !page.hasMore || entry.pagesFetched + pages >= env.SEARCH_CACHE_MAX_PAGES,
+        apiCalls: { increment: 1 },
+        hitCount: { increment: 1 },
+      },
+    });
+    return {
+      provider: entry.provider,
+      source: "cache+api",
+      apiCalled: true,
+      openJobs,
+      totalFound: jobs.length,
+      jobs: applyFilters(jobs, criteria),
+    };
+  });
+}
+
+/**
+ * Cache key = the parameters actually sent to the APIs. Filters applied afterwards
+ * (websites, keywords, salary, exact age) are left out, so searches that differ only in
+ * those share one cache entry. PAST_2_WEEKS and PAST_MONTH both ask the APIs for "month".
+ */
+export function searchKey(criteria: SearchCriteria) {
+  const tidy = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const params: SearchParams = {
+    query: tidy(criteria.query),
+    location: criteria.location ? tidy(criteria.location) || null : null,
+    country: criteria.country.toLowerCase(),
+    datePosted: criteria.datePosted === "PAST_WEEK" ? "PAST_WEEK" : "PAST_MONTH",
+    remoteOnly: criteria.locationTypes.length === 1 && criteria.locationTypes[0] === "REMOTE",
+    jobTypes: [...criteria.jobTypes].sort(),
+  };
+  const key = createHash("sha256").update(JSON.stringify(params)).digest("hex");
+  return { key, params };
+}
+
+function expiry() {
+  return new Date(Date.now() + env.SEARCH_CACHE_TTL_HOURS * 60 * 60 * 1000);
+}
+
+function cacheData(page: ProviderPage & { provider: SearchProvider }, jobs: NormalizedJob[], pages: number) {
+  return {
+    provider: page.provider,
+    jobs: jobs as unknown as object[],
+    pagesFetched: pages,
+    nextPageToken: page.nextPageToken ?? null,
+    exhausted: !page.hasMore || pages >= env.SEARCH_CACHE_MAX_PAGES,
+  };
+}
+
+/** Cached jobs come back from JSON, so dates are strings again. */
+function readCachedJobs(entry: SearchCache): NormalizedJob[] {
+  const rows = Array.isArray(entry.jobs) ? (entry.jobs as unknown as NormalizedJob[]) : [];
+  return rows.map((j) => ({ ...j, postedAt: j.postedAt ? new Date(j.postedAt) : null }));
+}
+
+function dedupe(jobs: NormalizedJob[]): NormalizedJob[] {
+  const seen = new Set<string>();
+  return jobs.filter((j) => {
+    if (seen.has(j.externalId)) return false;
+    seen.add(j.externalId);
+    return true;
+  });
+}
+
+/** Runs one search key at a time, so two users running the same search make one API call. */
+const locks = new Map<string, Promise<unknown>>();
+async function withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (locks.get(key) ?? Promise.resolve()).catch(() => undefined).then(fn);
+  locks.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (locks.get(key) === run) locks.delete(key);
+  }
+}
+
+function fetchFrom(provider: SearchProvider, params: SearchParams, req: PageRequest, ctx: SearchContext) {
+  return provider === "JSEARCH" ? searchJSearch(params, req, ctx) : searchSerpApi(params, req, ctx);
+}
+
+/** JSearch first; SerpApi Google Jobs when JSearch is not configured, out of quota, down, or returns nothing. */
+async function fetchWithFallback(
+  params: SearchParams,
+  req: PageRequest,
+  ctx: SearchContext,
+): Promise<ProviderPage & { provider: SearchProvider }> {
   if (!env.JSEARCH_API_KEY && !env.SERPAPI_API_KEY) {
     throw new HttpError(503, "No job search API is configured. Set JSEARCH_API_KEY and/or SERPAPI_API_KEY in .env");
   }
 
-  let jobs: NormalizedJob[] = [];
-  let provider: "JSEARCH" | "SERPAPI" = "JSEARCH";
   try {
-    jobs = await searchJSearch(params, ctx);
-    if (!jobs.length) throw new ProviderError("JSEARCH", "no results", true);
+    const page = await searchJSearch(params, req, ctx);
+    if (!page.jobs.length) throw new ProviderError("JSEARCH", "no results", true);
+    return { ...page, provider: "JSEARCH" };
   } catch (jsearchErr) {
     logger.warn({ err: (jsearchErr as Error).message }, "JSearch failed; trying SerpApi");
+    const noResults = jsearchErr instanceof ProviderError && jsearchErr.message.endsWith("no results");
     if (!env.SERPAPI_API_KEY) {
-      if (jsearchErr instanceof ProviderError && jsearchErr.message.endsWith("no results")) jobs = [];
-      else throw new HttpError(502, `Job search failed (${(jsearchErr as Error).message}) and SERPAPI_API_KEY is not set`);
-    } else {
-      provider = "SERPAPI";
-      try {
-        jobs = await searchSerpApi(params, ctx);
-      } catch (serpErr) {
-        throw new HttpError(502, `Job search failed. ${(jsearchErr as Error).message}; ${(serpErr as Error).message}`);
-      }
+      if (noResults) return { jobs: [], hasMore: false, nextPageToken: null, provider: "JSEARCH" };
+      throw new HttpError(502, `Job search failed (${(jsearchErr as Error).message}) and SERPAPI_API_KEY is not set`);
+    }
+    try {
+      return { ...(await searchSerpApi(params, req, ctx)), provider: "SERPAPI" };
+    } catch (serpErr) {
+      throw new HttpError(502, `Job search failed. ${(jsearchErr as Error).message}; ${(serpErr as Error).message}`);
     }
   }
-
-  const filtered = applyFilters(jobs, criteria).slice(0, criteria.maxResults);
-  return { provider, totalFound: jobs.length, jobs: filtered };
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_AGE_DAYS = { PAST_WEEK: 7, PAST_2_WEEKS: 14, PAST_MONTH: 30 } as const;
+export const DAY_MS = 24 * 60 * 60 * 1000;
+export const MAX_AGE_DAYS = { PAST_WEEK: 7, PAST_2_WEEKS: 14, PAST_MONTH: 30 } as const;
 
 /** Applies the user's criteria that the search APIs cannot filter on. */
 export function applyFilters(jobs: NormalizedJob[], c: SearchCriteria): NormalizedJob[] {

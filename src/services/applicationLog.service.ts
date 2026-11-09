@@ -76,27 +76,31 @@ export function logFilePath(): string {
 /** Jobs the user applied to on the given date (local time). */
 export async function appliedJobsOn(userId: string, date: string): Promise<AppliedJobRow[]> {
   const { start, end } = dayRange(date);
-  const jobs = await prisma.job.findMany({
+  const jobs = await prisma.application.findMany({
     where: {
       userId,
       applicationStatus: "APPLIED",
       applicationDate: { gte: start, lt: end },
       applicationFiles: { is: { resumeLink: { not: null } } },
     },
-    include: { company: { select: { name: true } }, applicationFiles: true },
+    include: {
+      posting: { include: { company: { select: { name: true } } } },
+      applyOption: { select: { url: true } },
+      applicationFiles: true,
+    },
     orderBy: { applicationDate: "asc" },
   });
   return jobs.map((j) => ({
     jobId: j.id,
     dateApplied: j.applicationDate!,
-    position: j.positionName,
-    company: j.company?.name ?? j.companyName,
-    location: j.location,
-    locationType: LABELS[j.locationType] ?? j.locationType,
-    jobType: LABELS[j.jobType] ?? j.jobType,
+    position: j.posting.positionName,
+    company: j.posting.company?.name ?? j.posting.companyName,
+    location: j.posting.location,
+    locationType: LABELS[j.posting.locationType] ?? j.posting.locationType,
+    jobType: LABELS[j.posting.jobType] ?? j.posting.jobType,
     foundOn: LABELS[j.searchWebsite] ?? j.searchWebsite,
     matchRating: j.matchRating,
-    applicationLink: j.applicationLink,
+    applicationLink: j.applyOption.url,
     resume: j.applicationFiles?.resumeLink ?? null,
     coverLetter: j.applicationFiles?.coverLetterLink ?? null,
   }));

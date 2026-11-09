@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { setStatusMany } from "./jobs.service.js";
 
 /** Rows in the "blacklisted" table are per user: one user's blacklist never affects another user. */
 
@@ -16,6 +17,15 @@ export async function blacklistedCompanyIds(userId: string): Promise<Set<string>
   return new Set(rows.map((r) => r.companyId));
 }
 
+/** Normalised names of the user's blacklisted companies (to check jobs not saved yet). */
+export async function blacklistedCompanyNames(userId: string): Promise<Set<string>> {
+  const rows = await prisma.blacklisted.findMany({
+    where: { userId },
+    select: { company: { select: { normalizedName: true } } },
+  });
+  return new Set(rows.map((r) => r.company.normalizedName));
+}
+
 /** Adds the company to the user's blacklist and skips the user's open jobs there. */
 export async function blacklistCompany(userId: string, companyId: string) {
   const row = await prisma.blacklisted.upsert({
@@ -23,10 +33,11 @@ export async function blacklistCompany(userId: string, companyId: string) {
     create: { userId, companyId },
     update: {},
   });
-  await prisma.job.updateMany({
-    where: { companyId, userId, applicationStatus: { in: ["FOUND", "DOCUMENTS_READY", "SAVED"] } },
-    data: { applicationStatus: "SKIPPED", statusMessage: "Company is blacklisted" },
-  });
+  await setStatusMany(
+    { userId, posting: { companyId }, applicationStatus: { in: ["FOUND", "DOCUMENTS_READY", "SAVED"] } },
+    "SKIPPED",
+    "Company is blacklisted",
+  );
   return row;
 }
 

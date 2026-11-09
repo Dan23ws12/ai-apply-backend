@@ -8,7 +8,14 @@ import {
   parseRelativeDate,
   websiteFrom,
 } from "./normalize.js";
-import { ProviderError, type NormalizedJob, type SearchContext, type SearchParams } from "./types.js";
+import {
+  ProviderError,
+  type NormalizedJob,
+  type PageRequest,
+  type ProviderPage,
+  type SearchContext,
+  type SearchParams,
+} from "./types.js";
 
 /** Backup provider: SerpApi Google Jobs. Docs: https://serpapi.com/google-jobs-api */
 
@@ -35,14 +42,17 @@ interface SerpResponse {
   serpapi_pagination?: { next_page_token?: string };
 }
 
-export async function searchSerpApi(params: SearchParams, ctx: SearchContext): Promise<NormalizedJob[]> {
+/** Google Jobs returns 10 results per page and every page is one SerpApi search credit. */
+export async function searchSerpApi(params: SearchParams, req: PageRequest, ctx: SearchContext): Promise<ProviderPage> {
   if (!env.SERPAPI_API_KEY) throw new ProviderError("SERPAPI", "SERPAPI_API_KEY is not set", false);
+  // Later pages can only be reached with the token from the page before.
+  if (req.page > 1 && !req.token) return { jobs: [], hasMore: false, nextPageToken: null };
 
   const jobs: NormalizedJob[] = [];
-  let nextPageToken: string | undefined;
+  let nextPageToken: string | undefined = req.token ?? undefined;
+  let empty = false;
 
-  // Google Jobs returns 10 results per page.
-  for (let page = 0; page < Math.min(Math.ceil(params.maxResults / 10), 5); page++) {
+  for (let page = 0; page < req.pages; page++) {
     const url = new URL("https://serpapi.com/search.json");
     url.searchParams.set("engine", "google_jobs");
     url.searchParams.set("q", params.query);
@@ -64,15 +74,19 @@ export async function searchSerpApi(params: SearchParams, ctx: SearchContext): P
     const json = (await res.json()) as SerpResponse;
     if (json.error) {
       // "Google hasn't returned any results" is not a failure, just an empty page.
-      if (/hasn't returned any results/i.test(json.error)) break;
+      if (/hasn't returned any results/i.test(json.error)) {
+        empty = true;
+        nextPageToken = undefined;
+        break;
+      }
       throw new ProviderError("SERPAPI", json.error, false);
     }
 
     for (const j of json.jobs_results ?? []) jobs.push(toNormalized(j));
     nextPageToken = json.serpapi_pagination?.next_page_token;
-    if (!nextPageToken || jobs.length >= params.maxResults) break;
+    if (!nextPageToken) break;
   }
-  return jobs;
+  return { jobs, hasMore: !empty && !!nextPageToken, nextPageToken: nextPageToken ?? null };
 }
 
 function toNormalized(j: SerpJob): NormalizedJob {

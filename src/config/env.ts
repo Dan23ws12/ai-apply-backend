@@ -21,6 +21,26 @@ const EnvSchema = z.object({
   JSEARCH_API_HOST: z.string().default("jsearch.p.rapidapi.com"),
   SERPAPI_API_KEY: z.string().optional().default(""),
 
+  // ── Caching (cost control) ──
+  /** Hours a cached search stays usable. After that the search starts again from page 1. */
+  SEARCH_CACHE_TTL_HOURS: z.coerce.number().positive().default(24),
+  /**
+   * The search API is only called for a cached search when fewer than this many jobs
+   * matching the search are still open (in the cache and not yet saved, or saved with
+   * status FOUND, DOCUMENTS_READY, FORM_FILLED, SAVED or INCOMPLETE).
+   */
+  SEARCH_REFRESH_THRESHOLD: z.coerce.number().int().min(0).default(20),
+  /** Most pages kept per cached search (top-ups stop here until the entry expires). */
+  SEARCH_CACHE_MAX_PAGES: z.coerce.number().int().min(1).max(20).default(10),
+  /** Days a fraud rating is reused. Company / domain checks can change, so keep this short-ish. */
+  FRAUD_CACHE_TTL_DAYS: z.coerce.number().positive().default(14),
+  /** Days a match rating is reused. Editing a resume or skill file invalidates it straight away. */
+  MATCH_CACHE_TTL_DAYS: z.coerce.number().positive().default(30),
+  /** Change this to throw away every cached rating (e.g. after changing the AI model or prompts). */
+  EVALUATION_CACHE_VERSION: z.string().default("1"),
+  /** Folder that holds resumes/, shared-references/ and .agents/skills/ (fingerprinted for the match cache). */
+  REFERENCES_ROOT: z.string().default("."),
+
   PYTHON_SERVICE_URL: z.url().default("http://127.0.0.1:8000"),
   PYTHON_SERVICE_TOKEN: z.string().min(8),
 
