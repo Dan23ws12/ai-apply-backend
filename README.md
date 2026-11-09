@@ -295,6 +295,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | Fraud check rules | `.agents/skills/fraud-likelihood-evaluation/SKILL.md` and the fraud signs in `python-service/app/ai.py` (`score_job`) |
 | Claude model and effort | `python-service/.env`: `AI_MODEL`, `AI_EFFORT_SCORING`, `AI_EFFORT_DOCUMENTS`, `AI_EFFORT_ANSWERS` |
 | Cover letter style | The `cover_letter()` prompt in `python-service/app/ai.py` |
+| Cover letter header and layout | `write_cover_letter()` in `python-service/app/documents.py`. The header (name and contact line) is copied from the tailored resume, so editing your base resume's header changes it in every new letter. The code always adds the date, recipient block, `Re:` line, greeting and signature; the AI writes only the body. |
 | Where resumes and cover letters are saved | `RESUME_OUTPUT_DIR` and `COVER_LETTER_OUTPUT_DIR` in `python-service/.env` (defaults: `resumes/jb resumes` and `cover-letters`) |
 | Answers to common questions (relocation, pronouns, etc.) | `extraAnswers` in your profile, or `PUT /api/answers/:id` |
 | Which job sites count | `websites` in each search (`LINKEDIN`, `GLASSDOOR`, `INDEED`, `COMPANY_SITE`, `OTHER`) |

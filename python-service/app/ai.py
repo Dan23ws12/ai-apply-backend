@@ -165,8 +165,11 @@ def cover_letter(category: str, job: Job, applicant: Applicant, resume_text: str
     ]
     user = (
         f"{_job_block(job)}\n\n<resume category=\"{category}\">\n{resume_text}\n</resume>\n\n"
-        f"Applicant: {applicant.first_name} {applicant.last_name}. "
-        "Write the greeting, 3-4 body paragraphs and the closing word (the name is added by the program)."
+        f"Applicant: {applicant.first_name} {applicant.last_name}.\n"
+        "Write only the 3-4 body paragraphs and the sign-off word. The program adds the header, date, "
+        "recipient address, subject line, greeting and signed name, so do not include any of those in the "
+        "paragraphs. Set hiring_manager_name (and hiring_manager_title) only when the posting names the "
+        "person; otherwise leave them null."
     )
     return _ask(system, user, CoverLetter, settings.ai_effort_documents, max_tokens=8000)
 

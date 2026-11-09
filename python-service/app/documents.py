@@ -155,7 +155,7 @@ def build_documents(req: DocumentsRequest) -> dict:
     resume_text = "\n".join(p.text for p in Document(str(resume_path)).paragraphs if p.text.strip())
     letter = ai.cover_letter(req.resume_category, req.job, req.applicant, resume_text)
     cover_path = settings.cover_letter_out / f"{stem}.docx"
-    write_cover_letter(cover_path, req.applicant, req.job, letter)
+    write_cover_letter(cover_path, resume_path, req.applicant, req.job, letter)
 
     return {
         "resume_path": str(resume_path),
@@ -165,28 +165,114 @@ def build_documents(req: DocumentsRequest) -> dict:
     }
 
 
-def write_cover_letter(path: Path, applicant: Applicant, job: Job, letter) -> None:
-    doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Calibri"
-    style.font.size = Pt(11)
-    style.paragraph_format.space_after = Pt(8)
+# ───────────────────────── cover letter ─────────────────────────
+#
+# Every cover letter gets the same header, built by code (not the AI):
+#
+#   NAME                         ┐ copied from the tailored resume, so the letter's
+#   City | Phone | Email | Link  ┘ header, fonts and margins match the resume exactly
+#
+#   November 9, 2026             date
+#
+#   Hiring Manager / name        recipient block
+#   Company
+#   Job location
+#
+#   Re: Application for <Position>
+#
+#   Dear <name / Hiring Manager>,
+#   ...body...
+#   Sincerely,
+#   <Full name>
 
-    name = doc.add_paragraph()
-    run = name.add_run(f"{applicant.first_name} {applicant.last_name}")
-    run.bold = True
-    run.font.size = Pt(14)
-    contact = [
-        ", ".join(x for x in [applicant.city, applicant.region] if x),
-        applicant.phone,
-        applicant.email,
-        applicant.linkedin_url,
-    ]
-    doc.add_paragraph(" | ".join(c for c in contact if c))
-    doc.add_paragraph(date.today().strftime("%B %d, %Y").replace(" 0", " "))
-    doc.add_paragraph(f"{job.company}\nRe: {job.title}")
-    doc.add_paragraph(letter.greeting)
+BODY_SIZE = Pt(11)
+
+
+def _resume_header(doc) -> list:
+    """Paragraphs above the first section heading (name + contact lines)."""
+    header = []
+    for p in doc.paragraphs:
+        if _is_heading(p):
+            break
+        if p.text.strip():
+            header.append(p)
+    return header
+
+
+def _profile_contact_line(applicant: Applicant) -> str:
+    location = ", ".join(x for x in [applicant.city, applicant.region] if x)
+    parts = [location, applicant.phone, applicant.email, applicant.linkedin_url, applicant.portfolio_url]
+    return " | ".join(p for p in parts if p)
+
+
+def _body_font(header: list) -> str | None:
+    """Font of the resume's contact line, so the letter body matches it."""
+    for p in header[1:] + header[:1]:
+        for r in p.runs:
+            if r.font.name:
+                return r.font.name
+    return None
+
+
+def _add_line(doc, text: str = "", *, bold: bool = False, font: str | None = None, space_after: float = 0):
+    p = doc.add_paragraph()
+    p.alignment = 0  # left
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(space_after)
+    if text:
+        run = p.add_run(text)
+        run.bold = bold or None
+        run.font.size = BODY_SIZE
+        if font:
+            run.font.name = font
+    return p
+
+
+def write_cover_letter(path: Path, resume_path: Path, applicant: Applicant, job: Job, letter) -> None:
+    # Start from the tailored resume so styles, page size, margins and the
+    # header (including any LinkedIn hyperlink) carry over unchanged.
+    doc = Document(str(resume_path))
+    header = _resume_header(doc)
+    body = doc.element.body
+    keep = {p._p for p in header}
+    for child in list(body):
+        if child.tag.endswith("}sectPr") or child in keep:
+            continue
+        body.remove(child)
+
+    full_name = f"{applicant.first_name} {applicant.last_name}"
+    font = _body_font(header)
+
+    if not header:
+        # Fallback when the resume has no header lines: build one from the profile.
+        name_p = _add_line(doc, full_name, bold=True, font=font)
+        name_p.alignment = 1
+        name_p.runs[0].font.size = Pt(16)
+        contact_p = _add_line(doc, _profile_contact_line(applicant), font=font)
+        contact_p.alignment = 1
+
+    today = date.today()
+    _add_line(doc)
+    _add_line(doc, f"{today:%B} {today.day}, {today.year}", font=font)
+    _add_line(doc)
+
+    recipient = (letter.hiring_manager_name or "").strip()
+    _add_line(doc, recipient or "Hiring Manager", font=font)
+    if recipient and (letter.hiring_manager_title or "").strip():
+        _add_line(doc, letter.hiring_manager_title.strip(), font=font)
+    _add_line(doc, job.company, font=font)
+    if job.location:
+        _add_line(doc, job.location, font=font)
+    _add_line(doc)
+
+    _add_line(doc, f"Re: Application for {job.title}", bold=True, font=font, space_after=10)
+
+    greeting = f"Dear {recipient}," if recipient else "Dear Hiring Manager,"
+    _add_line(doc, greeting, font=font, space_after=10)
     for para in letter.paragraphs:
-        doc.add_paragraph(para)
-    doc.add_paragraph(f"{letter.closing}\n{applicant.first_name} {applicant.last_name}")
+        if para.strip():
+            _add_line(doc, para.strip(), font=font, space_after=10)
+
+    _add_line(doc, (letter.closing or "Sincerely,").strip().rstrip(",") + ",", font=font)
+    _add_line(doc, full_name, font=font)
     doc.save(str(path))

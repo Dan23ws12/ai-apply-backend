@@ -96,9 +96,17 @@ class ResumeEdits(BaseModel):
 
 
 class CoverLetter(BaseModel):
-    greeting: str = Field(description="e.g. 'Dear Hiring Manager,'")
-    paragraphs: list[str] = Field(description="3 or 4 short paragraphs")
-    closing: str = Field(description="e.g. 'Sincerely,'")
+    """Only the body comes from the AI. The header, date, recipient block,
+    subject line, greeting and signature are added by documents.py."""
+
+    hiring_manager_name: str | None = Field(
+        default=None, description="Full name of the hiring manager ONLY if the posting states it; otherwise null"
+    )
+    hiring_manager_title: str | None = Field(
+        default=None, description="Their job title if the posting states it; otherwise null"
+    )
+    paragraphs: list[str] = Field(description="3 or 4 body paragraphs. No greeting, no sign-off, no name")
+    closing: str = Field(default="Sincerely,", description="Sign-off word, e.g. 'Sincerely,'")
 
 
 class Answer(BaseModel):
