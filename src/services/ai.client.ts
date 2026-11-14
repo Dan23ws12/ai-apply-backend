@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { env } from "../config/env.js";
+import { HttpError } from "../lib/errors.js";
 import { audit } from "./audit.service.js";
 import { recordAiUsage } from "./spending.service.js";
 
@@ -91,6 +92,72 @@ function subjectOf(payload: unknown): string | null {
   return job?.title ? `${job.title}${job.company ? ` at ${job.company}` : ""}` : null;
 }
 
+/** How long one AI service request may take (documents can take a few minutes). */
+const AI_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * An AI service failure with a message the user can act on. Extends HttpError, so the API
+ * answers with this status and message instead of a generic 500.
+ *   503 unreachable  - the service isn't running, or PYTHON_SERVICE_URL is wrong
+ *   504 timeout      - it didn't answer within AI_TIMEOUT_MS
+ *   502 the rest     - it answered with an error or with something unexpected
+ */
+export class AiServiceError extends HttpError {
+  constructor(status: number, message: string, reason: string, path: string, retryable: boolean) {
+    super(status, message, { service: "ai", reason, endpoint: path, retryable });
+    this.name = "AiServiceError";
+  }
+}
+
+/** The network error code under fetch's generic "fetch failed" (ECONNREFUSED, ENOTFOUND, ...). */
+function networkCode(err: unknown): string | undefined {
+  let e = err as { code?: string; cause?: unknown } | undefined;
+  for (let i = 0; e && i < 4; i++) {
+    if (typeof e.code === "string") return e.code;
+    e = e.cause as typeof e;
+  }
+  return undefined;
+}
+
+function connectionError(err: unknown, path: string): AiServiceError {
+  const name = (err as Error)?.name;
+  if (name === "TimeoutError" || name === "AbortError") {
+    return new AiServiceError(504, `The AI service did not answer within ${AI_TIMEOUT_MS / 60_000} minutes. Try again in a moment.`, "timeout", path, true);
+  }
+  const code = networkCode(err);
+  if (code === "ECONNRESET" || code === "UND_ERR_SOCKET") {
+    return new AiServiceError(502, "The connection to the AI service was lost before it finished. Try again.", "connection_lost", path, true);
+  }
+  return new AiServiceError(
+    503,
+    `The AI service can't be reached at ${env.PYTHON_SERVICE_URL}${code ? ` (${code})` : ""}. ` +
+      "Make sure it is running (cd python-service && uvicorn app.main:app --port 8000) and that PYTHON_SERVICE_URL is correct.",
+    "unreachable",
+    path,
+    true,
+  );
+}
+
+/** Turns an error reply from the AI service into a clear message. */
+function replyError(status: number, detailMessage: string | undefined, path: string): AiServiceError {
+  if (status === 401 || status === 403) {
+    return new AiServiceError(502, "The AI service rejected the API's service token. PYTHON_SERVICE_TOKEN must be the same in .env and python-service/.env.", "auth", path, false);
+  }
+  if (status === 404) {
+    return new AiServiceError(502, `The AI service has no ${path} endpoint. It may be an older version: update and restart it.`, "not_found", path, false);
+  }
+  if (status === 422) {
+    return new AiServiceError(502, `The AI service could not read the request to ${path}. The API and AI service versions may not match.`, "bad_request", path, false);
+  }
+  return new AiServiceError(
+    502,
+    detailMessage ? `The AI service failed: ${detailMessage}` : `The AI service failed with status ${status}. Check its log for details.`,
+    "service_error",
+    path,
+    status >= 500,
+  );
+}
+
 async function call<S extends z.ZodType>(
   path: string,
   payload: unknown,
@@ -98,13 +165,34 @@ async function call<S extends z.ZodType>(
   ctx: AiCallContext,
 ): Promise<z.infer<S>> {
   const started = Date.now();
-  const res = await fetch(new URL(path, env.PYTHON_SERVICE_URL), {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-service-token": env.PYTHON_SERVICE_TOKEN },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(10 * 60_000), // document generation can take a few minutes
-  });
-  const text = await res.text();
+  const failed = (err: AiServiceError, statusCode?: number) => {
+    audit({
+      type: "AI_CALL",
+      userId: ctx.userId,
+      requestId: ctx.requestId,
+      method: "POST",
+      url: path,
+      statusCode,
+      durationMs: Date.now() - started,
+      message: err.message,
+      metadata: err.details,
+    });
+    return err;
+  };
+
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(new URL(path, env.PYTHON_SERVICE_URL), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-service-token": env.PYTHON_SERVICE_TOKEN },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    });
+    text = await res.text();
+  } catch (err) {
+    throw failed(connectionError(err, path));
+  }
 
   // Save the tokens every Claude call used, including calls made before an error.
   let body: { usage?: unknown; detail?: { usage?: unknown; message?: string } } | null = null;
@@ -131,10 +219,20 @@ async function call<S extends z.ZodType>(
     message: res.ok ? undefined : text.slice(0, 2000),
   });
   if (!res.ok) {
-    const message = body?.detail?.message ?? text.slice(0, 500);
-    throw new Error(`Python service ${path} returned ${res.status}: ${message}`);
+    // FastAPI puts our message in detail.message, its own errors in detail (string or list).
+    const detail = body?.detail as unknown;
+    const detailMessage =
+      typeof detail === "string" ? detail : typeof (detail as { message?: unknown })?.message === "string" ? (detail as { message: string }).message : undefined;
+    throw replyError(res.status, detailMessage?.slice(0, 500), path);
   }
-  return schema.parse(body);
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    throw failed(
+      new AiServiceError(502, `The AI service sent an unexpected reply to ${path}. The API and AI service versions may not match.`, "bad_reply", path, false),
+      res.status,
+    );
+  }
+  return parsed.data;
 }
 
 export const aiClient = {

@@ -26,7 +26,12 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     message = "Request body is not valid JSON";
   }
 
-  if (status >= 500) logger.error({ err, requestId: req.requestId }, "Unhandled error");
+  if (err instanceof HttpError && status >= 500) {
+    // Expected failures (e.g. the AI service is down) already carry a clear message: no stack trace needed.
+    logger.warn({ status, message, details, requestId: req.requestId }, "Request failed");
+  } else if (status >= 500) {
+    logger.error({ err, requestId: req.requestId }, "Unhandled error");
+  }
 
   audit({
     type: "ERROR",
