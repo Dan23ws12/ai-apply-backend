@@ -11,6 +11,14 @@ const EnvSchema = z.object({
 
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   JWT_EXPIRES_IN: z.string().default("7d"),
+  /** Link sent for a password reset. {token} is replaced with the reset token. */
+  PASSWORD_RESET_URL: z.string().default("http://localhost:5173/reset-password?token={token}"),
+  PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  /** Uploaded resumes / cover letters. Relative paths start at the backend folder. */
+  UPLOAD_DIR: z.string().default("./storage/uploads"),
+  UPLOAD_MAX_MB: z.coerce.number().positive().max(50).default(10),
+  /** How long a document preview / download link works. */
+  FILE_LINK_TTL_MINUTES: z.coerce.number().int().min(1).max(1440).default(30),
   CREDENTIALS_ENCRYPTION_KEY: z
     .string()
     .refine((v) => Buffer.from(v, "base64").length === 32, {

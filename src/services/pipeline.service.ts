@@ -59,13 +59,14 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
           !!pickApplyOption(j.applyOptions, criteria.websites),
       ).length;
       // Saved applications for this search that are not applied, skipped or failed, and still recent enough.
-      const cutoff = new Date(Date.now() - MAX_AGE_DAYS[criteria.datePosted] * DAY_MS);
+      const maxAge = MAX_AGE_DAYS[criteria.datePosted];
+      const cutoff = maxAge === null ? null : new Date(Date.now() - maxAge * DAY_MS);
       const saved = await prisma.application.count({
         where: {
           userId: ctx.userId,
           applicationStatus: { in: [...OPEN_STATUSES] },
           OR: [{ searchCriteriaId: criteria.id }, { posting: { externalId: { in: ids } } }],
-          posting: { OR: [{ postedAt: null }, { postedAt: { gte: cutoff } }] },
+          ...(cutoff ? { posting: { OR: [{ postedAt: null }, { postedAt: { gte: cutoff } }] } } : {}),
         },
       });
       return unsaved + saved;

@@ -5,6 +5,7 @@ import { recordSearchUsage } from "../spending.service.js";
 import {
   isLikelyCompanySite,
   jobTypeFrom,
+  refineJobType,
   locationTypeFrom,
   parseRelativeDate,
   websiteFrom,
@@ -122,7 +123,7 @@ function toNormalized(j: SerpJob): NormalizedJob {
     companyWebsite: null,
     description: j.description ?? "",
     location: j.location ?? null,
-    jobType: jobTypeFrom(j.detected_extensions?.schedule_type),
+    jobType: refineJobType(jobTypeFrom(j.detected_extensions?.schedule_type), j.title, j.description ?? ""),
     locationType: locationTypeFrom(j.detected_extensions?.work_from_home ?? null, `${j.title} ${j.location ?? ""} ${j.description ?? ""}`),
     postedAt,
     ...salary,

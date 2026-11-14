@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { encryptJson } from "../lib/crypto.js";
-import { body, validate } from "../middleware/validate.js";
+import { notFound } from "../lib/errors.js";
+import { body, params, validate } from "../middleware/validate.js";
 import { CredentialsBody, ProfileBody, UpdateUserBody, UserSettingsBody } from "../schemas/index.js";
-import { getUserCredentials } from "../services/credentials.service.js";
+import { SiteLoginBody, SiteLoginPatchBody, SiteParams } from "../schemas/account.js";
+import { connectedSites, getUserCredentials, saveUserCredentials } from "../services/credentials.service.js";
 import { getUserSettings, updateUserSettings } from "../services/settings.service.js";
 
 export const usersRouter = Router();
@@ -51,29 +52,56 @@ usersRouter.patch("/me/settings", validate({ body: UserSettingsBody }), async (r
 });
 
 // ── Job-site credentials (encrypted, write-only) ──
-usersRouter.put("/me/credentials", validate({ body: CredentialsBody }), async (req, res) => {
-  const incoming = body(req, CredentialsBody);
-  const current = await getUserCredentials(req.user!.id);
-  const merged = { ...current, ...incoming };
-  await prisma.user.update({
-    where: { id: req.user!.id },
-    data: { credentials: encryptJson(merged) as object },
-  });
-  res.json({ savedSites: Object.keys(merged) });
-});
+// Passwords are encrypted with CREDENTIALS_ENCRYPTION_KEY and never returned.
 
-/** Returns which sites have saved logins, never the passwords themselves. */
+/**
+ * Sites with a saved login, as { linkedin: { email, hasPassword }, ... }.
+ * Only connected sites are listed, so the keys are the connected sites.
+ */
 usersRouter.get("/me/credentials", async (req, res) => {
-  const creds = await getUserCredentials(req.user!.id);
-  res.json({
-    sites: Object.fromEntries(
-      Object.entries(creds).map(([site, c]) => [site, { email: c?.email ?? null, hasPassword: !!c?.password }]),
-    ),
-  });
+  res.json(connectedSites(await getUserCredentials(req.user!.id)));
 });
 
+/** Add or replace logins for several sites at once; sites not in the body are kept. */
+usersRouter.put("/me/credentials", validate({ body: CredentialsBody }), async (req, res) => {
+  const merged = { ...(await getUserCredentials(req.user!.id)), ...body(req, CredentialsBody) };
+  await saveUserCredentials(req.user!.id, merged);
+  res.json(connectedSites(merged));
+});
+
+/** Remove every saved login. */
 usersRouter.delete("/me/credentials", async (req, res) => {
   await prisma.user.update({ where: { id: req.user!.id }, data: { credentials: Prisma.DbNull } });
+  res.status(204).end();
+});
+
+/** Add or replace one site's login: PUT /api/users/me/credentials/linkedin { email, password }. */
+usersRouter.put("/me/credentials/:site", validate({ params: SiteParams, body: SiteLoginBody }), async (req, res) => {
+  const { site } = params(req, SiteParams);
+  const creds = { ...(await getUserCredentials(req.user!.id)), [site]: body(req, SiteLoginBody) };
+  await saveUserCredentials(req.user!.id, creds);
+  res.json(connectedSites(creds));
+});
+
+/** Change one site's email and/or password; a field left out keeps its saved value. */
+usersRouter.patch("/me/credentials/:site", validate({ params: SiteParams, body: SiteLoginPatchBody }), async (req, res) => {
+  const { site } = params(req, SiteParams);
+  const creds = await getUserCredentials(req.user!.id);
+  const current = creds[site];
+  if (!current) throw notFound(`Saved login for ${site}`);
+  const patch = body(req, SiteLoginPatchBody);
+  creds[site] = { email: patch.email ?? current.email, password: patch.password ?? current.password };
+  await saveUserCredentials(req.user!.id, creds);
+  res.json(connectedSites(creds));
+});
+
+/** Remove one site's login; the other sites are kept. */
+usersRouter.delete("/me/credentials/:site", validate({ params: SiteParams }), async (req, res) => {
+  const { site } = params(req, SiteParams);
+  const creds = await getUserCredentials(req.user!.id);
+  if (!creds[site]) throw notFound(`Saved login for ${site}`);
+  delete creds[site];
+  await saveUserCredentials(req.user!.id, creds);
   res.status(204).end();
 });
 

@@ -264,7 +264,7 @@ function bestOption(options: string[], answer: string): number {
 }
 
 /**
- * Pre-fills the email/password boxes on a LinkedIn or Glassdoor sign-in page with
+ * Pre-fills the email/password boxes on a LinkedIn, Glassdoor or Indeed sign-in page with
  * the saved credentials. You still click "Sign in" yourself (and handle any 2FA).
  */
 async function fillLoginIfNeeded(page: Page, creds: FillInputs["credentials"]) {
@@ -272,6 +272,7 @@ async function fillLoginIfNeeded(page: Page, creds: FillInputs["credentials"]) {
   let login: SiteLogin | undefined;
   if (host.endsWith("linkedin.com")) login = creds.linkedin;
   else if (host.includes("glassdoor.")) login = creds.glassdoor;
+  else if (host.endsWith("indeed.com") || host.includes(".indeed.")) login = creds.indeed;
   if (!login) return;
 
   const password = page.locator('input[type="password"]:visible').first();

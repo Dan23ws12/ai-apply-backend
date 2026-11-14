@@ -3,6 +3,7 @@ import { auditedFetch } from "../audit.service.js";
 import { recordSearchUsage } from "../spending.service.js";
 import {
   jobTypeFrom,
+  refineJobType,
   locationTypeFrom,
   websiteFrom,
 } from "./normalize.js";
@@ -40,8 +41,16 @@ interface JSearchJob {
   job_salary_period?: string | null;
 }
 
-const DATE_MAP = { PAST_WEEK: "week", PAST_2_WEEKS: "month", PAST_MONTH: "month" } as const;
-const TYPE_MAP = { FULL_TIME: "FULLTIME", PART_TIME: "PARTTIME", CONTRACT: "CONTRACTOR", INTERNSHIP: "INTERN" } as const;
+/** JSearch date_posted values. ALL_TIME = "all" (no date limit). */
+const DATE_MAP = { PAST_WEEK: "week", PAST_2_WEEKS: "month", PAST_MONTH: "month", ALL_TIME: "all" } as const;
+/** JSearch has no "permanent" type: PERMANENT asks for full-time and part-time jobs, then the app keeps the permanent ones. */
+const TYPE_MAP: Partial<Record<string, string[]>> = {
+  FULL_TIME: ["FULLTIME"],
+  PART_TIME: ["PARTTIME"],
+  PERMANENT: ["FULLTIME", "PARTTIME"],
+  CONTRACT: ["CONTRACTOR"],
+  INTERNSHIP: ["INTERN"],
+};
 
 const PAGE_SIZE = 10;
 
@@ -55,7 +64,7 @@ export async function searchJSearch(params: SearchParams, req: PageRequest, ctx:
   url.searchParams.set("country", params.country);
   url.searchParams.set("date_posted", DATE_MAP[params.datePosted as keyof typeof DATE_MAP] ?? "month");
   if (params.remoteOnly) url.searchParams.set("work_from_home", "true");
-  const types = params.jobTypes.map((t) => TYPE_MAP[t as keyof typeof TYPE_MAP]).filter(Boolean);
+  const types = [...new Set(params.jobTypes.flatMap((t) => TYPE_MAP[t] ?? []))];
   if (types.length) url.searchParams.set("employment_types", types.join(","));
 
   const res = await auditedFetch(url.toString(), {
@@ -106,7 +115,7 @@ function toNormalized(j: JSearchJob): NormalizedJob {
     companyWebsite: j.employer_website ?? null,
     description: j.job_description ?? "",
     location,
-    jobType: jobTypeFrom(j.job_employment_type),
+    jobType: refineJobType(jobTypeFrom(j.job_employment_type), j.job_title, j.job_description ?? ""),
     locationType: locationTypeFrom(j.job_is_remote, `${j.job_title} ${j.job_description ?? ""}`),
     postedAt,
     salaryMin: j.job_min_salary ?? null,

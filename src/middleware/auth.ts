@@ -3,18 +3,16 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { HttpError } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
+import { activeSession } from "../services/session.service.js";
 
-const TokenPayload = z.object({ sub: z.string(), email: z.email() });
+/** sid = the sign-in session the token belongs to (see services/session.service.ts). */
+const TokenPayload = z.object({ sub: z.string(), email: z.email(), sid: z.uuid() });
 
-export function signToken(user: { id: string; email: string }): string {
-  return jwt.sign({ email: user.email }, env.JWT_SECRET, {
-    subject: user.id,
-    expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions["expiresIn"],
-  });
-}
-
-/** Requires "Authorization: Bearer <token>". The token payload is checked with Zod. */
+/**
+ * Requires "Authorization: Bearer <token>". The token must be valid AND its session still
+ * active: tokens of signed-out sessions, changed passwords and deleted accounts stop working
+ * straight away. Tokens issued before sessions existed have no sid and are rejected.
+ */
 export const requireAuth: RequestHandler = (req, _res, next) => {
   const header = req.header("authorization") ?? "";
   const [scheme, token] = header.split(" ");
@@ -24,14 +22,13 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
   try {
     payload = TokenPayload.parse(jwt.verify(token, env.JWT_SECRET));
   } catch {
-    return next(new HttpError(401, "Invalid or expired token"));
+    return next(new HttpError(401, "Invalid or expired token. Please sign in again."));
   }
-  // Tokens of deleted accounts must stop working straight away.
-  prisma.user
-    .findUnique({ where: { id: payload.sub }, select: { id: true } })
-    .then((user) => {
-      if (!user) return next(new HttpError(401, "Account no longer exists"));
+  activeSession(payload.sid, payload.sub)
+    .then((session) => {
+      if (!session) return next(new HttpError(401, "Your session has ended. Please sign in again."));
       req.user = { id: payload.sub, email: payload.email };
+      req.sessionId = session.id;
       next();
     })
     .catch(next);

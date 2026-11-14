@@ -3,7 +3,8 @@ import { env } from "../../config/env.js";
 import { HttpError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
-import type { SearchCache, SearchCriteria, SearchProvider, SearchWebsite } from "../../generated/prisma/client.js";
+import type { DatePostedRange, SearchCache, SearchCriteria, SearchProvider, SearchWebsite } from "../../generated/prisma/client.js";
+import { matchesJobTypes } from "./normalize.js";
 import { searchJSearch } from "./jsearch.provider.js";
 import { searchSerpApi } from "./serpapi.provider.js";
 import {
@@ -144,7 +145,8 @@ export function searchKey(criteria: SearchCriteria) {
     query: tidy(criteria.query),
     location: criteria.location ? tidy(criteria.location) || null : null,
     country: criteria.country.toLowerCase(),
-    datePosted: criteria.datePosted === "PAST_WEEK" ? "PAST_WEEK" : "PAST_MONTH",
+    // PAST_2_WEEKS and PAST_MONTH both ask the APIs for "month"; ALL_TIME asks for no date limit.
+    datePosted: criteria.datePosted === "PAST_WEEK" || criteria.datePosted === "ALL_TIME" ? criteria.datePosted : "PAST_MONTH",
     remoteOnly: criteria.locationTypes.length === 1 && criteria.locationTypes[0] === "REMOTE",
     jobTypes: [...criteria.jobTypes].sort(),
   };
@@ -227,7 +229,8 @@ async function fetchWithFallback(
 }
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-export const MAX_AGE_DAYS = { PAST_WEEK: 7, PAST_2_WEEKS: 14, PAST_MONTH: 30 } as const;
+/** Oldest posting age kept for each date range, in days. null = no limit (ALL_TIME). */
+export const MAX_AGE_DAYS: Record<DatePostedRange, number | null> = { PAST_WEEK: 7, PAST_2_WEEKS: 14, PAST_MONTH: 30, ALL_TIME: null };
 
 /** Applies the user's criteria that the search APIs cannot filter on. */
 export function applyFilters(jobs: NormalizedJob[], c: SearchCriteria): NormalizedJob[] {
@@ -243,12 +246,13 @@ export function applyFilters(jobs: NormalizedJob[], c: SearchCriteria): Normaliz
 
     if (!listedOn(job.applyOptions, c.websites)) return false;
     if (c.locationTypes.length && !c.locationTypes.includes(job.locationType) && job.locationType !== "UNKNOWN") return false;
-    if (c.jobTypes.length && !c.jobTypes.includes(job.jobType) && job.jobType !== "UNKNOWN") return false;
+    if (!matchesJobTypes(job, c.jobTypes)) return false;
     if (include.length && !include.some((k) => text.includes(k))) return false;
     if (exclude.some((k) => text.includes(k))) return false;
     if (c.minSalary && job.salaryMax && job.salaryPeriod === "YEAR" && job.salaryMax < c.minSalary) return false;
     // The APIs only filter by week or month, so check the exact age here. Jobs with no date are kept.
-    if (job.postedAt && Date.now() - job.postedAt.getTime() > MAX_AGE_DAYS[c.datePosted] * DAY_MS) return false;
+    const maxAge = MAX_AGE_DAYS[c.datePosted];
+    if (maxAge !== null && job.postedAt && Date.now() - job.postedAt.getTime() > maxAge * DAY_MS) return false;
     return true;
   });
 }

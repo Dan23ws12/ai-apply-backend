@@ -8,16 +8,16 @@ import { z } from "zod";
 export const IdParams = z.object({ id: z.uuid() });
 export const FileParams = z.object({ id: z.uuid(), kind: z.enum(["resume", "cover-letter"]) });
 
-const JobTypeEnum = z.enum(["FULL_TIME", "PART_TIME", "CONTRACT", "INTERNSHIP", "TEMPORARY", "OTHER", "UNKNOWN"]);
+const JobTypeEnum = z.enum(["FULL_TIME", "PART_TIME", "PERMANENT", "CONTRACT", "INTERNSHIP", "TEMPORARY", "OTHER", "UNKNOWN"]);
 const LocationTypeEnum = z.enum(["HYBRID", "REMOTE", "ON_SITE", "UNKNOWN"]);
 const WebsiteEnum = z.enum(["LINKEDIN", "GLASSDOOR", "INDEED", "COMPANY_SITE", "OTHER"]);
-const DatePostedEnum = z.enum(["PAST_WEEK", "PAST_2_WEEKS", "PAST_MONTH"]);
+const DatePostedEnum = z.enum(["PAST_WEEK", "PAST_2_WEEKS", "PAST_MONTH", "ALL_TIME"]);
 export const ApplicationStatusEnum = z.enum([
   "FOUND", "SKIPPED", "DOCUMENTS_READY", "SAVED", "FORM_FILLED", "INCOMPLETE", "ERROR", "APPLIED",
 ]);
 
 // ── auth ──
-const Password = z
+export const Password = z
   .string()
   .min(10, "Password must be at least 10 characters")
   .max(128)
@@ -46,7 +46,7 @@ export const UpdateUserBody = z.object({
 const SiteLogin = z.object({ email: z.email(), password: z.string().min(1).max(256) });
 /** Job-site credentials. Saved encrypted; never returned by the API. */
 export const CredentialsBody = z
-  .object({ linkedin: SiteLogin.optional(), glassdoor: SiteLogin.optional() })
+  .object({ linkedin: SiteLogin.optional(), glassdoor: SiteLogin.optional(), indeed: SiteLogin.optional() })
   .strict();
 
 const optionalUrl = z.url().optional().nullable();

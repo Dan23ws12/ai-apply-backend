@@ -37,8 +37,43 @@ export function jobTypeFrom(value: string | undefined | null): JobType {
   if (s.includes("contract")) return "CONTRACT";
   if (s.includes("intern")) return "INTERNSHIP";
   if (s.includes("temp")) return "TEMPORARY";
+  if (s.includes("permanent")) return "PERMANENT";
   if (!s) return "UNKNOWN";
   return "OTHER";
+}
+
+const PERMANENT_WORD = /\bpermanent\b/i;
+const NOT_PERMANENT = /\b(non|not)[- ]permanent\b|\btemp(orary)?[- ]to[- ]perm(anent)?\b|\btemp[- ]to[- ]hire\b/i;
+
+/** True when the posting says it is permanent (and not "non-permanent" or "temp-to-perm"). */
+export function mentionsPermanent(text: string): boolean {
+  return PERMANENT_WORD.test(text) && !NOT_PERMANENT.test(text);
+}
+
+/**
+ * The search APIs have no "permanent" type, so a job whose schedule is unknown is marked
+ * PERMANENT when its title or description says so.
+ */
+export function refineJobType(type: JobType, title: string, description: string): JobType {
+  if ((type === "UNKNOWN" || type === "OTHER") && mentionsPermanent(`${title}\n${description}`)) return "PERMANENT";
+  return type;
+}
+
+/**
+ * Whether a job passes the employment-type filter. Empty filter = any type; jobs that don't
+ * state their type are kept (as before). PERMANENT also matches full-time / part-time jobs
+ * whose posting says "permanent", and a PERMANENT job matches FULL_TIME / PART_TIME when the
+ * posting says full-time / part-time.
+ */
+export function matchesJobTypes(job: { jobType: JobType; positionName: string; description: string }, wanted: JobType[]): boolean {
+  if (!wanted.length || job.jobType === "UNKNOWN" || wanted.includes(job.jobType)) return true;
+  const text = `${job.positionName}\n${job.description}`;
+  if (wanted.includes("PERMANENT") && ["FULL_TIME", "PART_TIME", "OTHER"].includes(job.jobType) && mentionsPermanent(text)) return true;
+  if (job.jobType === "PERMANENT") {
+    if (wanted.includes("FULL_TIME") && /\bfull[- ]?time\b/i.test(text)) return true;
+    if (wanted.includes("PART_TIME") && /\bpart[- ]?time\b/i.test(text)) return true;
+  }
+  return false;
 }
 
 /** Works out remote / hybrid / on-site from the remote flag and the description text. */

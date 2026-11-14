@@ -153,19 +153,23 @@ node -e "console.log('PYTHON_SERVICE_TOKEN=' + require('crypto').randomBytes(24)
 
 You have two options:
 
-1. **Log in by hand (recommended).** The first time a LinkedIn or Glassdoor page opens in the auto-fill browser, log in yourself. The browser profile is saved in `storage/browser-profiles/<your user id>`, so you stay logged in on later runs.
+1. **Log in by hand (recommended).** The first time a LinkedIn, Glassdoor or Indeed page opens in the auto-fill browser, log in yourself. The browser profile is saved in `storage/browser-profiles/<your user id>`, so you stay logged in on later runs.
 2. **Save the logins in the app.** They're encrypted with `CREDENTIALS_ENCRYPTION_KEY` before they're stored in `users.credentials`. The API only ever returns *which* sites have a saved login, never the password. When a sign-in page appears, the app fills in the email and password boxes, and **you click Sign in yourself** and complete any 2-step verification.
 
+Add, change or remove one site at a time (`linkedin`, `glassdoor` or `indeed`):
+
 ```http
-PUT /api/users/me/credentials
+PUT /api/users/me/credentials/linkedin
 Authorization: Bearer <token>
 Content-Type: application/json
 
-{ "linkedin": { "email": "you@example.com", "password": "..." },
-  "glassdoor": { "email": "you@example.com", "password": "..." } }
+{ "email": "you@example.com", "password": "..." }
 ```
 
-`DELETE /api/users/me/credentials` removes them.
+- `PATCH /api/users/me/credentials/linkedin {"password":"..."}` changes only what you send.
+- `DELETE /api/users/me/credentials/linkedin` removes that site's login; the others are kept.
+- `GET /api/users/me/credentials` lists the connected sites, e.g. `{"linkedin":{"email":"you@example.com","hasPassword":true}}`.
+- `PUT /api/users/me/credentials` (several sites in one body) and `DELETE /api/users/me/credentials` (all sites) still work.
 
 ---
 
@@ -265,12 +269,18 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 
 | Method and path | What it does |
 |---|---|
-| `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` | Account and login |
+| `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` | Account and login. Each login is its own session (one per browser or device). |
+| `POST /api/auth/logout` | Sign out this session only. Your other devices, and other users, stay signed in. |
+| `POST /api/auth/logout-all`, `GET /api/auth/sessions` | Sign out all your devices; list your active sessions (`current` marks this one) |
+| `POST /api/auth/password-reset/request` with `{"email"}` | Ask for a reset link. Always answers `202`, whether or not the email has an account. |
+| `POST /api/auth/password-reset/confirm` with `{"token","newPassword"}` | Set a new password from the link. Signs the account out everywhere. |
+| `POST /api/auth/change-password` with `{"currentPassword","newPassword"}` | Change your password. Your other sessions are signed out; this one stays. |
 | `PATCH /api/users/me` | Change your first or last name |
 | `DELETE /api/users/me` | Delete your account. Your blacklist, profile, saved searches and saved answers are deleted; your jobs are kept. |
 | `GET/PUT /api/users/me/profile` | Details used to fill application forms |
 | `GET /api/users/me/settings`, `PATCH /api/users/me/settings` | Your job search settings: `jobsPerSearch` (most new jobs one run saves, 1–50, default 10) and `pagesPerSearch` (result pages per API call, about 10 jobs each, 1–5, default 1). Send only the fields you want to change. |
-| `GET/PUT/DELETE /api/users/me/credentials` | Saved LinkedIn/Glassdoor logins (encrypted, never returned) |
+| `GET/PUT/DELETE /api/users/me/credentials` | Saved job-site logins for every site (encrypted, never returned) |
+| `PUT/PATCH/DELETE /api/users/me/credentials/:site` | Add, change or remove one site's login (`linkedin`, `glassdoor`, `indeed`) |
 | `GET/POST /api/search-criteria`, `GET/PATCH/DELETE /api/search-criteria/:id` | Saved searches |
 | `POST /api/search-criteria/:id/run` | Run a search now. The reply says where jobs came from (`source`: `api`, `cache` or `cache+api`), whether the search API was called (`apiCalled`) and how many open jobs there were before the run (`openJobsBefore`). A search's `maxResults` (optional) overrides your `jobsPerSearch`. Jobs you already applied to (same application key) are saved as `SKIPPED` and counted in `skippedAlreadyApplied`. |
 | `GET /api/companies?blacklisted=true&search=`, `POST /api/companies`, `PATCH /api/companies/:id` | Companies. Each one shows `blacklisted` for **your** blacklist; `{"blacklisted":true}` adds it, `false` removes it. |
@@ -278,6 +288,13 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `PUT /api/companies/:id/blacklist`, `DELETE /api/companies/:id/blacklist` | Add a company to, or remove it from, your blacklist. Adding it marks your open jobs there as `SKIPPED`. |
 | `DELETE /api/companies/:id` | Delete a company for everyone. Its blacklist rows go with it; its jobs are kept. |
 | `GET /api/jobs?status=&website=&locationType=&minMatch=&maxFraud=&page=` | Your jobs |
+| `POST /api/jobs/search` | Search now and get the jobs back (array, in the frontend's `Job` shape). Body: `query`, `location`, `datePosted` (`PAST_WEEK`, `PAST_2_WEEKS`, `PAST_MONTH` or `ALL_TIME`), `websites`, `workModels`, `employmentTypes` (incl. `PERMANENT`), optional `postedAfter`, `limit`, `evaluate`. Details in `X-Search-*` headers. |
+| `GET /api/jobs/saved`, `PUT/DELETE /api/jobs/:id/saved` | Your saved jobs; save or un-save one |
+| `GET /api/jobs/applied`, `POST/DELETE /api/jobs/:id/applied` | Jobs you applied to (with the resume and cover letter used); mark one applied (optional `appliedAt`) or undo it |
+| `GET /api/jobs/:id/documents` | Resume and cover letter previews: file name, preview text, signed link, source (`AI` or `UPLOADED`), MIME type |
+| `POST /api/jobs/:id/documents/resume` or `.../cover-letter` | Upload your own file (multipart field `file`: `.pdf`, `.docx` or `.txt`, up to `UPLOAD_MAX_MB`) |
+| `DELETE /api/jobs/:id/documents/resume` or `.../cover-letter` | Remove your upload and go back to the AI document |
+| `GET /api/files/:token` | A document through a signed link (no login header needed; expires after `FILE_LINK_TTL_MINUTES`). Add `?download=1` to save it. |
 | `GET/PATCH /api/jobs/:id` | Job details. Set the status by hand, e.g. `SAVED`, or `APPLIED` if submission wasn't detected. A "job" here is your application, returned together with its posting's details. |
 | `GET /api/jobs/:id/history` | The job's status history, oldest first (e.g. `FOUND` → `SAVED` → `APPLIED`) |
 | `POST /api/jobs/:id/evaluate?refresh=true` | Re-run the evaluation: fraud likelihood rating first, then the match rating unless fraud is 80 or more. Cached ratings are reused (`cached` in the reply); `refresh=true` asks the AI again. |
@@ -329,6 +346,31 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 
 ---
 
+## Accounts, documents and saved jobs
+
+- **Sessions.** Every login creates a row in `sessions`, and the login token carries its id. Each request checks the session is still active.
+  - **Sign-out is per session:** `POST /api/auth/logout` ends only that session, so your other devices and other users stay signed in.
+  - **Password changes:** changing your password signs out your other devices. A reset signs out all of them.
+  - **After upgrading,** tokens issued before sessions existed stop working, so everyone signs in once more.
+- **Password reset.** `POST /api/auth/password-reset/request` creates a one-time link that expires after `PASSWORD_RESET_TTL_MINUTES`. Only a hash of it is stored.
+  - **There's no email sender yet.** Outside production, the link (`PASSWORD_RESET_URL`) is written to the API log. Connect your email provider in `deliverResetLink()` in `src/services/password.service.ts` before relying on it in production.
+  - **Requests are limited** to 3 per email address and 10 per IP address every 15 minutes.
+- **On-demand search** (`POST /api/jobs/search`) uses the same search cache and API fallback as saved searches.
+  - **Every returned job is saved as your job** (status `FOUND`), so it has an id you can save, apply to and make documents for.
+  - **New jobs are rated in the background** (fraud first, then match). Their ratings are `null` in the reply and show up in `GET /api/jobs/:id` once ready. Send `"evaluate": false` to skip rating.
+  - **Blacklisted companies** are left out.
+- **"All time" and "Permanent".**
+  - **`datePosted: "ALL_TIME"`** asks JSearch for jobs of any age (`date_posted=all`) and skips the age filter.
+  - **`PERMANENT`** asks JSearch for full-time and part-time jobs, then keeps the ones whose posting says "permanent" (not "temp-to-perm" or "non-permanent"). A job whose type isn't stated but whose text says "permanent" is stored as `PERMANENT`.
+  - **Jobs that don't state their type** still pass every employment-type filter, as before.
+- **Saved and applied lists** live on the server, per user.
+  - **Saving is separate from the status:** saving a job sets `applications.savedAt`, so a saved job stays saved when its documents are made.
+  - **Applied jobs** leave the saved list.
+- **Documents.**
+  - **Uploads** go to `UPLOAD_DIR/<userId>/<jobId>/` (git-ignored) and replace the job's resume or cover letter link, so auto-fill uses your file. The file's content is checked against its extension.
+  - **Previews:** `.docx` and `.txt` files get text previews. PDFs come with `mimeType` and a link for the frontend to show.
+  - **Links** are signed and short-lived, so they work in `<a>` and `<iframe>` tags without the login header.
+
 ## Tracking spending
 
 - **AI tokens are recorded automatically.** Every Claude call (fraud rating, match rating, resume, cover letter, form answers) adds a row to `ai_token_usage`.
@@ -378,7 +420,9 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 
 | Table | Purpose |
 |---|---|
-| `users` | `id` (the user ID), first name, last name, email, password hash, `credentials` (encrypted JSON of job-site logins), timestamps |
+| `users` | `id` (the user ID), first name, last name, email, password hash, `credentials` (encrypted JSON of LinkedIn / Glassdoor / Indeed logins), timestamps |
+| `sessions` | One row per sign-in: user, browser (user agent), IP address, last used, expiry, `revokedAt` (set on sign-out) |
+| `password_reset_tokens` | Reset links: user, SHA-256 hash of the token, expiry, `usedAt`, requesting IP |
 | `user_profiles` | One per user: phone, address, links, work authorisation, salary, notice period, extra answers. This is the data used to fill forms. |
 | `user_settings` | One per user: `jobsPerSearch` (default 10) and `pagesPerSearch` (default 1). Created with the defaults the first time it's read. |
 | `search_criteria` | Saved searches and filters per user: query, location, posted within (past week, 2 weeks or month), job and location types, sites, include/exclude keywords, minimum salary, match/fraud limits, optional `maxResults` override |
@@ -386,7 +430,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `blacklisted` | One row per user per company that user never wants to apply to: `userId`, `companyId`, `createdAt`, `updatedAt`. Unique on (`userId`, `companyId`). |
 | `job_postings` | One row per posting, shared by every user who finds it: `externalId` (unique), provider, hiring company (`companyId` + `companyName`), position name, description, location, job type, location type, salary, `postedAt` (exact posting date), fraud rating with reason, details and `fraudEvaluatedAt` |
 | `job_apply_options` | Every apply link for a posting: publisher, URL, whether it's the company's own page, job board. Unique on (`postingId`, `url`). |
-| `applications` | One user's application to one posting (the API calls these "jobs"): `userId`, `postingId`, the search that found it, the chosen apply link (`applyOptionId`), the job board it was found on (`searchWebsite`), match rating with reason and details, application status, status message, application date, timestamps. Unique on (`userId`, `postingId`). Saved, applied and every other status live here. |
+| `applications` | One user's application to one posting (the API calls these "jobs"): `userId`, `postingId`, the search that found it, the chosen apply link (`applyOptionId`), the job board it was found on (`searchWebsite`), match rating with reason and details, application status, status message, application date, `savedAt` (saved jobs list), timestamps. Unique on (`userId`, `postingId`). Saved, applied and every other status live here. |
 | `application_status_events` | Every status change of an application (from, to, message, when). Rows are never edited. |
 | `application_files` | Related job, resume link, cover letter link (both default to the AI versions and can be changed), timestamps |
 | `application_answers` | Saved answers to form questions per user, so the AI is asked each question once and your corrections are reused |

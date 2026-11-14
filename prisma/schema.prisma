@@ -18,6 +18,8 @@ datasource db {
 enum JobType {
   FULL_TIME
   PART_TIME
+  /// Permanent (ongoing) position: the posting says "permanent" and is not contract, temporary or an internship.
+  PERMANENT
   CONTRACT
   INTERNSHIP
   TEMPORARY
@@ -64,6 +66,8 @@ enum DatePostedRange {
   PAST_WEEK
   PAST_2_WEEKS
   PAST_MONTH
+  /// No date limit: the search APIs are asked for jobs of any age.
+  ALL_TIME
 }
 
 enum AnswerSource {
@@ -127,7 +131,7 @@ model User {
   email        String   @unique
   passwordHash String
   /// Job-site credentials, ENCRYPTED with AES-256-GCM (see src/lib/crypto.ts).
-  /// Shape after decryption: { linkedin?: {email, password}, glassdoor?: {email, password} }
+  /// Shape after decryption: { linkedin?: {email, password}, glassdoor?: {email, password}, indeed?: {email, password} }
   credentials  Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -141,8 +145,53 @@ model User {
   blacklistedCompanies Blacklisted[]
   aiTokenUsage         AiTokenUsage[]
   searchApiUsage       SearchApiUsage[]
+  sessions             Session[]
+  passwordResetTokens  PasswordResetToken[]
 
   @@map("users")
+}
+
+/// One sign-in (one browser or device). The login token carries the session id, and every
+/// request checks the session is still active, so signing out ends only that session: other
+/// devices of the same user, and other users, stay signed in.
+model Session {
+  id         String    @id @default(uuid())
+  userId     String
+  userAgent  String?
+  ipAddress  String?
+  /// Updated at most every few minutes while the session is used.
+  lastUsedAt DateTime  @default(now())
+  expiresAt  DateTime
+  /// Set when the user signs out (or the password changes). Revoked sessions are rejected.
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Password reset links. Only a SHA-256 hash of the token is stored; each token works once
+/// and expires after PASSWORD_RESET_TTL_MINUTES.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  /// Who asked for it (for the audit trail).
+  ipAddress String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 /// SUGGESTED: the data used to fill application forms. Kept apart from `users`
@@ -358,6 +407,9 @@ model Application {
   statusMessage     String?           @db.Text
   /// When the user submitted the application (status APPLIED).
   applicationDate   DateTime?
+  /// When the user saved the job (saved jobs list). Kept separately from the status, so a saved job
+  /// stays saved when documents are generated or the form is filled. Null = not saved.
+  savedAt           DateTime?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
@@ -371,6 +423,7 @@ model Application {
 
   @@unique([userId, postingId])
   @@index([userId, applicationStatus])
+  @@index([userId, savedAt])
   @@index([postingId])
   @@index([searchCriteriaId])
   @@map("applications")
