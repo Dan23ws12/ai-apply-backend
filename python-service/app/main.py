@@ -15,11 +15,12 @@ from fastapi.concurrency import run_in_threadpool
 import anthropic
 
 from . import ai, documents
-from .fraud import FraudRequest, FraudResult, evaluate_fraud
-from .match import MatchRequest, MatchResult, evaluate_match
+from . import usage
+from .fraud import FraudRequest, evaluate_fraud
+from .match import MatchRequest, evaluate_match
 from .config import settings
 from .references import CATEGORIES, load_category
-from .schemas import Answers, AnswersRequest, DocumentsRequest
+from .schemas import AnswersRequest, DocumentsRequest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 app = FastAPI(title="Job Apply AI service", version="0.1.0")
@@ -49,8 +50,8 @@ def health() -> dict:
     }
 
 
-def _ai_error(e: Exception) -> HTTPException:
-    """Turns Claude API errors into a 502 with a readable message."""
+def _error(e: Exception, status: int = 502) -> HTTPException:
+    """Readable error, plus the token usage spent before it failed (so it is still recorded)."""
     if isinstance(e, anthropic.RateLimitError):
         msg = "Claude API rate limit reached; try again shortly"
     elif isinstance(e, anthropic.APIStatusError):
@@ -61,46 +62,53 @@ def _ai_error(e: Exception) -> HTTPException:
         msg = "No Claude credentials found. Set ANTHROPIC_API_KEY in python-service/.env"
     else:
         msg = str(e)
-    return HTTPException(status_code=502, detail=msg)
+    return HTTPException(status_code=status, detail={"message": msg, "usage": getattr(e, "usage", [])})
 
 
-AI_ERRORS = (anthropic.APIError, TypeError, RuntimeError)
+AI_ERRORS = (anthropic.APIError, ai.AIError, TypeError, RuntimeError)
 
 
-@app.post("/evaluate/fraud", response_model=FraudResult, dependencies=[Depends(require_token)])
-async def fraud(req: FraudRequest) -> FraudResult:
+async def _tracked(fn, *args, **kwargs) -> dict:
+    """Runs fn in a worker thread and returns its result as a dict with a "usage" list."""
+    result, records = await run_in_threadpool(usage.run_tracked, fn, *args, **kwargs)
+    body = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    body["usage"] = records
+    return body
+
+
+@app.post("/evaluate/fraud", dependencies=[Depends(require_token)])
+async def fraud(req: FraudRequest) -> dict:
     """Fraud likelihood rating, 1-100 (higher = more likely a scam). Never sees the resume."""
     try:
-        return await run_in_threadpool(evaluate_fraud, ai.client, req)
+        return await _tracked(evaluate_fraud, ai.client, req)
     except AI_ERRORS as e:
-        raise _ai_error(e) from e
+        raise _error(e) from e
 
 
-@app.post("/evaluate/match", response_model=MatchResult, dependencies=[Depends(require_token)])
-async def match(req: MatchRequest) -> MatchResult:
+@app.post("/evaluate/match", dependencies=[Depends(require_token)])
+async def match(req: MatchRequest) -> dict:
     """Job match rating, 1-100 (higher = better fit). Never sees fraud findings."""
     try:
-        return await run_in_threadpool(
-            lambda: evaluate_match(ai.client, req, model=settings.match_model, effort=settings.ai_effort_match))
+        return await _tracked(evaluate_match, ai.client, req, model=settings.match_model, effort=settings.ai_effort_match)
     except AI_ERRORS as e:
-        raise _ai_error(e) from e
+        raise _error(e) from e
 
 
 @app.post("/documents", dependencies=[Depends(require_token)])
 async def build_documents(req: DocumentsRequest) -> dict:
     try:
-        return await run_in_threadpool(documents.build_documents, req)
-    except ai.AIError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        return await _tracked(documents.build_documents, req)
+    except AI_ERRORS as e:
+        raise _error(e) from e
     except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise _error(e, 500) from e
 
 
-@app.post("/answers", response_model=Answers, dependencies=[Depends(require_token)])
-async def answers(req: AnswersRequest) -> Answers:
+@app.post("/answers", dependencies=[Depends(require_token)])
+async def answers(req: AnswersRequest) -> dict:
     if not req.questions:
-        return Answers(answers=[])
+        return {"answers": [], "usage": []}
     try:
-        return await run_in_threadpool(ai.answer_questions, req)
-    except ai.AIError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        return await _tracked(ai.answer_questions, req)
+    except AI_ERRORS as e:
+        raise _error(e) from e

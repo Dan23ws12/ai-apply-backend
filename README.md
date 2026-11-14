@@ -83,6 +83,7 @@ AI Job Apply Project/
 │   │   ├── pipeline.service.ts   # search → save → score → generate documents
 │   │   ├── ai.client.ts      # Calls the Python service (replies checked with Zod)
 │   │   ├── audit.service.ts  # Writes audit_logs rows
+│   │   ├── spending.service.ts   # Records AI token usage and search credits; spending summary
 │   │   └── credentials.service.ts
 │   ├── autofill/
 │   │   ├── autofill.service.ts   # Opens the browser and fills the form; never clicks Submit
@@ -96,6 +97,7 @@ AI Job Apply Project/
 │       ├── main.py           # FastAPI endpoints: /evaluate/fraud /evaluate/match /documents /answers /health
 │       ├── fraud.py          # Fraud likelihood rating: script checks + AI (with LinkedIn web search) + score
 │       ├── match.py          # Job match rating: AI judgments + scoring script (no fraud input)
+│       ├── usage.py          # Collects the token usage of every Claude call for the Node API to save
 │       ├── ai.py             # All Claude calls (structured JSON outputs)
 │       ├── documents.py      # Edits a copy of the base resume and writes the cover letter
 │       ├── references.py     # Loads the repo's resume skills, reference files and base resumes
@@ -287,6 +289,14 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `GET /api/answers`, `PUT /api/answers/:id`, `DELETE /api/answers/:id` | Saved answers to application questions. Correct one once and it's reused every time. |
 | `GET /api/audit-logs?type=&requestId=&limit=` | Developer log of your requests and API calls |
 
+| `GET /api/spending/summary?month=YYYY-MM` | One month at a glance: AI tokens and estimated cost by action and by model, search credits against your plan's quota, payments, budget status |
+| `GET /api/spending/token-usage?from=&to=&action=&model=` | Every AI call: model, tokens, when, what for, estimated cost (newest first) |
+| `GET /api/spending/token-usage/totals?by=action\|model\|day\|month&from=&to=` | Token and cost totals grouped by action, model, day or month (local time) |
+| `GET /api/spending/search-usage?from=&to=&provider=` | Every JSearch / SerpApi request and the credits it used |
+| `GET/POST /api/spending/services`, `PATCH/DELETE /api/spending/services/:id` | The paid APIs you use and their plan (cost, billing period, included units) |
+| `GET /api/spending/payments?serviceId=&unpaid=true`, `POST`, `PATCH/DELETE /api/spending/payments/:id` | Payments you enter yourself. Fill in `datePaid` once paid: `PATCH {"datePaid":"YYYY-MM-DD"}` |
+| `GET/POST /api/spending/prices`, `PATCH/DELETE /api/spending/prices/:id` | Claude prices used to estimate token costs |
+| `GET/POST /api/spending/budgets`, `PATCH/DELETE /api/spending/budgets/:id` | Monthly spending limits with a warning threshold |
 ---
 
 ## Important information
@@ -319,6 +329,22 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | What to change | Where |
 |---|---|
 | How resumes are tailored (tone, keyword placement, which sections change) | Edit the repo's `.agents/skills/*-resume-guidance/SKILL.md` and `shared-references/*.md`. No code changes needed. |
+## Tracking spending
+
+- **AI tokens are recorded automatically.** Every Claude call (fraud rating, match rating, resume, cover letter, form answers) adds a row to `ai_token_usage`.
+  - **The Python service reports the usage** of each call to the Node API, including calls made before an error, so failed attempts are counted too.
+  - **Ratings reused from the evaluation cache** make no AI call, so they add no row.
+- **Costs are estimates** from `ai_model_prices`. The migration starts it with list prices for Opus 5.5, Sonnet 5.5 and Haiku 5.5. Haiku's cache-read price is an assumption, so check it on the pricing page.
+  - **When prices change,** add a row with a later `effectiveFrom`. Older usage keeps the price it was recorded with.
+  - **Your Anthropic invoice is the final amount.**
+- **Search credits are recorded automatically** in `search_api_usage`: JSearch bills one request per page, SerpApi one search per page. Failed requests are logged with 0 credits.
+- **Payments are entered by you.**
+  1. The migration adds the three APIs the app uses (Claude, JSearch, SerpApi) to `api_services`. Fill in your plan, cost and included units, e.g. `PATCH /api/spending/services/:id {"planName":"Pro","cost":25,"includedUnits":10000}`.
+  2. Add a payment: `POST /api/spending/payments {"serviceId":"…","amount":25,"billingPeriod":"MONTHLY","periodStart":"2026-11-01","periodEnd":"2026-11-30"}`.
+  3. Fill in the date when you pay: `PATCH /api/spending/payments/:id {"datePaid":"2026-11-14"}`. `GET /api/spending/payments?unpaid=true` lists the ones still to pay.
+- **Budgets** (`POST /api/spending/budgets {"name":"Claude","serviceId":"…","monthlyLimitUsd":20}`) only warn: `/api/spending/summary` shows the percentage used, `warning` and `overLimit`. Nothing is blocked.
+  - **What counts against a budget:** payments covering the month, plus, for the Claude service, the month's estimated token cost when no payment is entered yet.
+
 | Base resume used for each track | Update the `resumes/base resumes/...docx` path in that track's `SKILL.md`. The app reads the path from there and otherwise falls back to the highest version number. |
 | Extended skills lists | `shared-references/*-skills-and-tools.md` |
 | Fraud check rules | `.agents/skills/job-post-evaluation/SKILL.md` (for you and agents) and `python-service/app/fraud.py` (`RULES`, `TEXT_PATTERNS`, `POINTS`, `KNOWN_SITES`) for the app |
@@ -362,8 +388,14 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `search_cache` | Search API results shared by all users, keyed by the normalised search parameters: cached jobs, pages fetched, next-page token, whether the provider has run out, API call and hit counts, expiry |
 | `evaluation_cache` | Fraud and match results shared by all users, keyed by the posting (plus preferred resume track for match) and a fingerprint of the rules and resume files, with an expiry |
 | `audit_logs` | HTTP requests and responses, external API calls, AI calls, auto-fill events, errors |
+| `ai_token_usage` | One row per Claude call: model that answered, input / output / cache-write / cache-read tokens, web searches, what it was for (`action`: fraud rating, match rating, resume tailoring, cover letter, form answers), when (`usedAt`), estimated cost, the job it was for, fallback flag. Rows are never edited. |
+| `api_services` | The paid APIs: name, kind (AI, job search, other), plan, cost, billing period (per request, per month, per year, pay-as-you-go, ...), included units |
+| `api_payments` | Money paid per service: amount, billing period, period covered, `datePaid` (you enter it), invoice reference |
+| `ai_model_prices` *(suggested)* | Claude prices per million tokens and per 1,000 web searches, with the date they apply from |
+| `search_api_usage` *(suggested)* | One row per JSearch / SerpApi request: credits used, results, status. Rows are never edited. |
+| `spending_budgets` *(suggested)* | Monthly limit per service, per kind of API or overall, with a warning percentage |
 
-Every table has `createdAt` and `updatedAt`, except `audit_logs`. Log rows are never edited, so it only has `createdAt`.
+Every table has `createdAt` and `updatedAt`, except `audit_logs`, `ai_token_usage` and `search_api_usage`. Their rows are never edited, so they only record when they happened (`createdAt` or `usedAt`).
 
 ### What happens when a user or company is deleted
 

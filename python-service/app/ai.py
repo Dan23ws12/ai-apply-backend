@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import TypeVar
 
 import anthropic
 from pydantic import BaseModel
 
 from . import references as refs
+from . import usage
 from .config import settings
 from .schemas import (
     Answers,
@@ -33,8 +35,9 @@ class AIError(RuntimeError):
     pass
 
 
-def _ask(system: list[dict], user: str, output: type[T], effort: str, max_tokens: int = 16000) -> T:
+def _ask(system: list[dict], user: str, output: type[T], effort: str, max_tokens: int = 16000, *, action: str) -> T:
     """One structured-output request. Server-side fallbacks retry a refused request on another model."""
+    started = time.time()
     try:
         response = client.messages.parse(
             model=settings.ai_model,
@@ -57,6 +60,7 @@ def _ask(system: list[dict], user: str, output: type[T], effort: str, max_tokens
             raise AIError("No Claude credentials found. Set ANTHROPIC_API_KEY in python-service/.env") from e
         raise
 
+    usage.record(response, action, started)
     if response.stop_reason == "refusal":
         raise AIError("The model declined this request")
     if response.stop_reason == "max_tokens":
@@ -107,7 +111,7 @@ def resume_edits(category: str, job: Job, keywords: list[str], numbered_resume: 
         "Put every tool or keyword that appears in an experience bullet in bold_terms. "
         "Never invent employers, dates, metrics, certifications or duties. Keep the resume to one page."
     )
-    return _ask(system, user, ResumeEdits, settings.ai_effort_documents)
+    return _ask(system, user, ResumeEdits, settings.ai_effort_documents, action=usage.RESUME_TAILORING)
 
 
 # ─────────────────────────── cover letter ───────────────────────────
@@ -129,7 +133,7 @@ def cover_letter(category: str, job: Job, applicant: Applicant, resume_text: str
         "paragraphs. Set hiring_manager_name (and hiring_manager_title) only when the posting names the "
         "person; otherwise leave them null."
     )
-    return _ask(system, user, CoverLetter, settings.ai_effort_documents, max_tokens=8000)
+    return _ask(system, user, CoverLetter, settings.ai_effort_documents, max_tokens=8000, action=usage.COVER_LETTER)
 
 
 # ─────────────────────────── form answers ───────────────────────────
@@ -157,4 +161,4 @@ def answer_questions(req: AnswersRequest) -> Answers:
         f"<questions>\n{json.dumps(questions, indent=2)}\n</questions>\n\n"
         "Return one answer per question id."
     )
-    return _ask(system, user, Answers, settings.ai_effort_answers, max_tokens=8000)
+    return _ask(system, user, Answers, settings.ai_effort_answers, max_tokens=8000, action=usage.FORM_ANSWERS)

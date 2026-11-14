@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import socket
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from urllib.parse import urlparse
 import anthropic
 from pydantic import BaseModel, Field, ValidationError
 
+from . import usage
 from .config import settings
 
 log = logging.getLogger("fraud")
@@ -295,6 +297,7 @@ def _with_web_search(client: anthropic.Anthropic, user: str) -> FraudJudgments:
     messages: list[dict] = [{"role": "user", "content": user + "\n\n" + JSON_INSTRUCTION}]
     response = None
     for _ in range(4):  # the server pauses long tool loops with stop_reason "pause_turn"
+        started = time.time()
         response = client.messages.create(
             model=model,
             max_tokens=8000,
@@ -303,6 +306,7 @@ def _with_web_search(client: anthropic.Anthropic, user: str) -> FraudJudgments:
             tools=[{"type": tool_type, "name": "web_search", "max_uses": settings.fraud_max_searches}],
             output_config={"effort": settings.ai_effort_fraud},
         )
+        usage.record(response, usage.FRAUD_RATING, started)  # each continuation is billed separately
         if response.stop_reason != "pause_turn":
             break
         messages = [messages[0], {"role": "assistant", "content": response.content}]
@@ -313,6 +317,7 @@ def _with_web_search(client: anthropic.Anthropic, user: str) -> FraudJudgments:
 
 
 def _without_tools(client: anthropic.Anthropic, user: str) -> FraudJudgments:
+    started = time.time()
     response = client.messages.parse(
         model=settings.fraud_model,
         max_tokens=6000,
@@ -322,6 +327,7 @@ def _without_tools(client: anthropic.Anthropic, user: str) -> FraudJudgments:
         output_config={"effort": settings.ai_effort_fraud},
         output_format=FraudJudgments,
     )
+    usage.record(response, usage.FRAUD_RATING, started)
     if response.stop_reason == "refusal" or response.parsed_output is None:
         raise RuntimeError(f"fraud check returned no result (stop_reason={response.stop_reason})")
     return response.parsed_output

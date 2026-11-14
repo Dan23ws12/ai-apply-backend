@@ -12,6 +12,7 @@ import { criteriaRouter } from "./routes/criteria.routes.js";
 import { jobsRouter } from "./routes/jobs.routes.js";
 import { answersRouter, auditRouter } from "./routes/misc.routes.js";
 import { applicationLogsRouter } from "./routes/applicationLogs.routes.js";
+import { spendingRouter } from "./routes/spending.routes.js";
 import { usersRouter } from "./routes/users.routes.js";
 
 export function createApp() {
@@ -38,6 +39,7 @@ export function createApp() {
   app.use("/api/answers", requireAuth, answersRouter);
   app.use("/api/audit-logs", requireAuth, auditRouter);
   app.use("/api/application-logs", requireAuth, applicationLogsRouter);
+  app.use("/api/spending", requireAuth, spendingRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "Route not found" }));
   app.use(errorHandler);

@@ -25,6 +25,7 @@ from docx import Document
 from pydantic import BaseModel, Field
 
 from . import references as refs
+from . import usage
 from .documents import analyse
 
 # ───────────────────────── resume facts (script) ─────────────────────────
@@ -295,6 +296,7 @@ def evaluate_match(client: anthropic.Anthropic, req: MatchRequest, *, model: str
         output_config={"effort": effort},
         output_format=Judgments,
     )
+    usage.record(response, usage.MATCH_RATING, started)
     if response.stop_reason == "refusal":
         raise RuntimeError("match evaluation was refused")
     if response.parsed_output is None:

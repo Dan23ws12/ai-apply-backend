@@ -78,6 +78,36 @@ enum EvaluationKind {
   MATCH
 }
 
+/// What an AI call was used for.
+enum AiAction {
+  FRAUD_RATING // fraud likelihood rating of a job posting
+  MATCH_RATING // job match rating against the resumes
+  RESUME_TAILORING // rewriting the resume for a job
+  COVER_LETTER // writing the cover letter
+  FORM_ANSWERS // answering application form questions
+  OTHER
+}
+
+/// Kind of paid API.
+enum ApiCategory {
+  AI
+  JOB_SEARCH
+  OTHER
+}
+
+/// How a price or payment is charged.
+enum BillingPeriod {
+  PER_REQUEST
+  PER_1000_REQUESTS
+  PER_MILLION_TOKENS
+  PAY_AS_YOU_GO
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+  ONE_TIME
+}
+
 enum AuditLogType {
   HTTP_REQUEST
   HTTP_RESPONSE
@@ -109,6 +139,8 @@ model User {
   answers              ApplicationAnswer[]
   auditLogs            AuditLog[]
   blacklistedCompanies Blacklisted[]
+  aiTokenUsage         AiTokenUsage[]
+  searchApiUsage       SearchApiUsage[]
 
   @@map("users")
 }
@@ -335,6 +367,7 @@ model Application {
   applyOption      JobApplyOption           @relation(fields: [applyOptionId], references: [id], onDelete: Restrict)
   applicationFiles ApplicationFile?
   statusEvents     ApplicationStatusEvent[]
+  aiTokenUsage     AiTokenUsage[]
 
   @@unique([userId, postingId])
   @@index([userId, applicationStatus])
@@ -449,6 +482,175 @@ model EvaluationCache {
   @@unique([kind, cacheKey])
   @@index([expiresAt])
   @@map("evaluation_cache")
+}
+
+// ─────────────────────────── Spending tracking ───────────────────────────
+
+/// One row per Claude API call: which model, how many tokens, when, and what for.
+/// Written automatically from the usage the Python service reports. Append-only, so no updatedAt.
+/// Cached evaluations make no AI call and add no row.
+model AiTokenUsage {
+  id                BigInt   @id @default(autoincrement())
+  userId            String?
+  /// The application (job) the call was for, when known (resume, cover letter).
+  applicationId     String?
+  /// Ties the call to the HTTP request that triggered it (same id as audit_logs.requestId).
+  requestId         String?
+  action            AiAction
+  provider          String   @default("anthropic")
+  /// Model that actually answered (can differ from the one requested when a fallback model ran).
+  model             String
+  inputTokens       Int
+  outputTokens      Int
+  /// Prompt-cache tokens: written (billed at ~1.25x input) and read (billed at ~0.1x input).
+  cacheWriteTokens  Int      @default(0)
+  cacheReadTokens   Int      @default(0)
+  /// Web searches run by the model (fraud check LinkedIn step), billed per search.
+  webSearchRequests Int      @default(0)
+  /// SUGGESTED: cost estimated from ai_model_prices when the call was made (a snapshot, so later
+  /// price changes don't rewrite history). Null when the model has no price entry.
+  estimatedCostUsd  Decimal? @db.Decimal(12, 6)
+  priceId           String?
+  /// SUGGESTED: true when a fallback model answered after a refusal.
+  fallbackUsed      Boolean  @default(false)
+  stopReason        String?
+  durationMs        Int?
+  /// Short label of what the call was about, e.g. "Junior Developer at Northwind".
+  subject           String?
+  /// Extra details: Claude message id, per-attempt usage when a fallback ran.
+  details           Json?
+  /// When the tokens were used.
+  usedAt            DateTime @default(now())
+
+  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  application Application?  @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  price       AiModelPrice? @relation(fields: [priceId], references: [id], onDelete: SetNull)
+
+  @@index([usedAt])
+  @@index([action, usedAt])
+  @@index([model, usedAt])
+  @@index([userId, usedAt])
+  @@index([requestId])
+  @@map("ai_token_usage")
+}
+
+/// SUGGESTED: price list used to estimate ai_token_usage costs. Add a new row with a later
+/// effectiveFrom when prices change; old usage rows keep the price that applied then.
+model AiModelPrice {
+  id                String   @id @default(uuid())
+  provider          String   @default("anthropic")
+  model             String
+  /// US dollars per million tokens.
+  inputPerMTok      Decimal  @db.Decimal(10, 4)
+  outputPerMTok     Decimal  @db.Decimal(10, 4)
+  cacheReadPerMTok  Decimal  @db.Decimal(10, 4)
+  cacheWritePerMTok Decimal  @db.Decimal(10, 4)
+  /// US dollars per 1,000 web searches.
+  webSearchPer1k    Decimal  @default(10) @db.Decimal(10, 4)
+  currency          String   @default("USD")
+  effectiveFrom     DateTime @default(now())
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  usage AiTokenUsage[]
+
+  @@unique([model, effectiveFrom])
+  @@map("ai_model_prices")
+}
+
+/// The paid APIs the app uses (Claude, JSearch, SerpApi, ...) and their current plan.
+model ApiService {
+  id             String          @id @default(uuid())
+  /// e.g. "JSearch (RapidAPI)"
+  name           String          @unique
+  category       ApiCategory
+  /// Search provider this service is, so search_api_usage can be matched to it.
+  searchProvider SearchProvider?
+  planName       String?
+  /// Current price of the plan, per billingPeriod. Null for pay-as-you-go.
+  cost           Decimal?        @db.Decimal(12, 2)
+  currency       String          @default("USD")
+  billingPeriod  BillingPeriod
+  /// SUGGESTED: what the plan includes per period, e.g. 200 "requests" a month.
+  includedUnits  Int?
+  unitName       String?
+  websiteUrl     String?
+  isActive       Boolean         @default(true)
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  payments ApiPayment[]
+  budgets  SpendingBudget[]
+
+  @@map("api_services")
+}
+
+/// Money actually paid for an API. Entered by you; datePaid is filled in manually.
+model ApiPayment {
+  id            String        @id @default(uuid())
+  serviceId     String
+  amount        Decimal       @db.Decimal(12, 2)
+  currency      String        @default("USD")
+  /// What the payment covers: a month, a year, a one-time top-up, ...
+  billingPeriod BillingPeriod
+  /// The period this payment covers (e.g. 2026-11-01 to 2026-11-30).
+  periodStart   DateTime?     @db.Date
+  periodEnd     DateTime?     @db.Date
+  /// When you paid. Entered manually; empty means not paid yet.
+  datePaid      DateTime?     @db.Date
+  /// SUGGESTED: invoice or receipt number.
+  invoiceRef    String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  service ApiService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@index([serviceId, periodStart])
+  @@index([datePaid])
+  @@map("api_payments")
+}
+
+/// SUGGESTED: one row per paid search API request (JSearch, SerpApi): how many credits it used,
+/// so you can compare usage with your plan's quota. Append-only.
+model SearchApiUsage {
+  id          BigInt         @id @default(autoincrement())
+  userId      String?
+  requestId   String?
+  provider    SearchProvider
+  /// Credits billed: JSearch counts each page as one request, SerpApi each page as one search.
+  credits     Int
+  resultCount Int?
+  statusCode  Int?
+  usedAt      DateTime       @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([provider, usedAt])
+  @@index([usedAt])
+  @@map("search_api_usage")
+}
+
+/// SUGGESTED: monthly spending limits. serviceId = one API; category = all APIs of a kind;
+/// both empty = everything. GET /api/spending/summary shows how much of each budget is used.
+model SpendingBudget {
+  id              String       @id @default(uuid())
+  name            String
+  serviceId       String?
+  category        ApiCategory?
+  monthlyLimitUsd Decimal      @db.Decimal(12, 2)
+  /// Show a warning once this percentage of the limit is used.
+  alertAtPercent  Int          @default(80)
+  isActive        Boolean      @default(true)
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  service ApiService? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@map("spending_budgets")
 }
 
 // ───────────────────────────── Audit logs ────────────────────────────

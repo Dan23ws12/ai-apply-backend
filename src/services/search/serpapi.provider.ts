@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { env } from "../../config/env.js";
 import { auditedFetch } from "../audit.service.js";
+import { recordSearchUsage } from "../spending.service.js";
 import {
   isLikelyCompanySite,
   jobTypeFrom,
@@ -69,9 +70,15 @@ export async function searchSerpApi(params: SearchParams, req: PageRequest, ctx:
       requestId: ctx.requestId,
       signal: AbortSignal.timeout(30_000),
     });
-    if (!res.ok) throw new ProviderError("SERPAPI", `HTTP ${res.status}`, res.status >= 500);
+    const usage = { provider: "SERPAPI" as const, statusCode: res.status, userId: ctx.userId, requestId: ctx.requestId };
+    if (!res.ok) {
+      void recordSearchUsage({ ...usage, credits: 0 }); // failed requests are logged but not billed
+      throw new ProviderError("SERPAPI", `HTTP ${res.status}`, res.status >= 500);
+    }
 
     const json = (await res.json()) as SerpResponse;
+    // Every page is one SerpApi search credit, including pages with no results.
+    void recordSearchUsage({ ...usage, credits: 1, resultCount: json.jobs_results?.length ?? 0 });
     if (json.error) {
       // "Google hasn't returned any results" is not a failure, just an empty page.
       if (/hasn't returned any results/i.test(json.error)) {

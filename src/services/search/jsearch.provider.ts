@@ -1,5 +1,6 @@
 import { env } from "../../config/env.js";
 import { auditedFetch } from "../audit.service.js";
+import { recordSearchUsage } from "../spending.service.js";
 import {
   jobTypeFrom,
   locationTypeFrom,
@@ -65,7 +66,9 @@ export async function searchJSearch(params: SearchParams, req: PageRequest, ctx:
     signal: AbortSignal.timeout(30_000),
   });
 
+  const usage = { provider: "JSEARCH" as const, statusCode: res.status, userId: ctx.userId, requestId: ctx.requestId };
   if (!res.ok) {
+    void recordSearchUsage({ ...usage, credits: 0 }); // failed requests are logged but not billed
     // 429 = quota used up, 5xx = provider outage -> both should fall back to SerpApi
     const retryable = res.status === 429 || res.status >= 500 || res.status === 403;
     throw new ProviderError("JSEARCH", `HTTP ${res.status}`, retryable);
@@ -75,6 +78,8 @@ export async function searchJSearch(params: SearchParams, req: PageRequest, ctx:
   if (json.status && json.status !== "OK") throw new ProviderError("JSEARCH", `status ${json.status}`, true);
 
   const data = json.data ?? [];
+  // JSearch bills each page of results (num_pages) as one request.
+  void recordSearchUsage({ ...usage, credits: req.pages, resultCount: data.length });
   // A short last page means there is nothing after it, so a top-up would be wasted.
   return { jobs: data.map(toNormalized), hasMore: data.length >= req.pages * PAGE_SIZE };
 }

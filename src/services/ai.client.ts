@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { audit } from "./audit.service.js";
+import { recordAiUsage } from "./spending.service.js";
 
 /**
  * Client for the Python AI / document service (python-service/).
@@ -76,11 +77,25 @@ export interface FormQuestion {
   required?: boolean;
 }
 
+export interface AiCallContext {
+  userId?: string;
+  requestId?: string;
+  /** The application (job) the call is for, saved on its ai_token_usage rows. */
+  applicationId?: string;
+}
+
+/** "Junior Developer at Northwind": a short label saved with the token usage. */
+function subjectOf(payload: unknown): string | null {
+  const p = payload as { title?: string; company?: string; job?: { title?: string; company?: string } } | null;
+  const job = p?.job ?? p;
+  return job?.title ? `${job.title}${job.company ? ` at ${job.company}` : ""}` : null;
+}
+
 async function call<S extends z.ZodType>(
   path: string,
   payload: unknown,
   schema: S,
-  ctx: { userId?: string; requestId?: string },
+  ctx: AiCallContext,
 ): Promise<z.infer<S>> {
   const started = Date.now();
   const res = await fetch(new URL(path, env.PYTHON_SERVICE_URL), {
@@ -90,6 +105,21 @@ async function call<S extends z.ZodType>(
     signal: AbortSignal.timeout(10 * 60_000), // document generation can take a few minutes
   });
   const text = await res.text();
+
+  // Save the tokens every Claude call used, including calls made before an error.
+  let body: { usage?: unknown; detail?: { usage?: unknown; message?: string } } | null = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
+  const applicationId = ctx.applicationId ?? (payload as { job_id?: string } | null)?.job_id;
+  void recordAiUsage(res.ok ? body?.usage : body?.detail?.usage, {
+    userId: ctx.userId,
+    requestId: ctx.requestId,
+    applicationId,
+    subject: subjectOf(payload),
+  });
   audit({
     type: "AI_CALL",
     userId: ctx.userId,
@@ -100,27 +130,30 @@ async function call<S extends z.ZodType>(
     durationMs: Date.now() - started,
     message: res.ok ? undefined : text.slice(0, 2000),
   });
-  if (!res.ok) throw new Error(`Python service ${path} returned ${res.status}: ${text.slice(0, 500)}`);
-  return schema.parse(JSON.parse(text));
+  if (!res.ok) {
+    const message = body?.detail?.message ?? text.slice(0, 500);
+    throw new Error(`Python service ${path} returned ${res.status}: ${message}`);
+  }
+  return schema.parse(body);
 }
 
 export const aiClient = {
   /** Step 1 of evaluation. Sends only the posting and company details. */
-  fraud: (job: JobForAi, ctx: { userId?: string; requestId?: string }) => call("/evaluate/fraud", job, FraudResult, ctx),
+  fraud: (job: JobForAi, ctx: AiCallContext) => call("/evaluate/fraud", job, FraudResult, ctx),
 
   /** Step 2 of evaluation. Sends only the posting; no fraud findings. */
   match: (
     body: { title: string; company: string; description: string; location?: string | null; preferred_category?: string | null },
-    ctx: { userId?: string; requestId?: string },
+    ctx: AiCallContext,
   ) => call("/evaluate/match", body, MatchResult, ctx),
 
   documents: (
     body: { job_id: string; job: JobForAi; applicant: ApplicantForAi; resume_category: string; keywords: string[] },
-    ctx: { userId?: string; requestId?: string },
+    ctx: AiCallContext,
   ) => call("/documents", body, DocumentsResult, ctx),
 
   answers: (
     body: { job: JobForAi; applicant: ApplicantForAi; questions: FormQuestion[] },
-    ctx: { userId?: string; requestId?: string },
+    ctx: AiCallContext,
   ) => call("/answers", body, AnswersResult, ctx),
 };
