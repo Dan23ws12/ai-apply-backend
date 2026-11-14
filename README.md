@@ -25,9 +25,9 @@ Search criteria ──► JSearch (SerpApi Google Jobs if JSearch fails)
                      │
                      ▼
             YOU review and click Submit ──► job marked APPLIED
-                     │
+                     │                      └─► row written to the SQLite ledger straight away
                      ▼
-            POST /api/application-logs ──► row added to docs/AI Job Application Logs.xlsx
+            POST /api/application-logs (end of day) ──► ledger exported to docs/AI Job Application Logs.xlsx
 ```
 
 ---
@@ -104,7 +104,8 @@ AI Job Apply Project/
 │       ├── schemas.py        # Pydantic models
 │       └── config.py
 └── storage/                  # Created at runtime (git-ignored)
-    └── browser-profiles/     # Saved browser profile, so you stay logged in
+    ├── browser-profiles/     # Saved browser profile, so you stay logged in
+    └── application-ledger.sqlite  # Every applied job, recorded the moment it is marked APPLIED
 ```
 
 Generated documents use the same naming as the resume skills: `{position}-{company}.docx`. Generating documents again for the same position and company replaces both files. Characters Windows doesn't allow in file names (such as `/` or `:`) are replaced with spaces. To save the documents somewhere else, change `RESUME_OUTPUT_DIR` and `COVER_LETTER_OUTPUT_DIR` in `python-service/.env`.
@@ -271,7 +272,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `GET /api/users/me/settings`, `PATCH /api/users/me/settings` | Your job search settings: `jobsPerSearch` (most new jobs one run saves, 1–50, default 10) and `pagesPerSearch` (result pages per API call, about 10 jobs each, 1–5, default 1). Send only the fields you want to change. |
 | `GET/PUT/DELETE /api/users/me/credentials` | Saved LinkedIn/Glassdoor logins (encrypted, never returned) |
 | `GET/POST /api/search-criteria`, `GET/PATCH/DELETE /api/search-criteria/:id` | Saved searches |
-| `POST /api/search-criteria/:id/run` | Run a search now. The reply says where jobs came from (`source`: `api`, `cache` or `cache+api`), whether the search API was called (`apiCalled`) and how many open jobs there were before the run (`openJobsBefore`). A search's `maxResults` (optional) overrides your `jobsPerSearch`. |
+| `POST /api/search-criteria/:id/run` | Run a search now. The reply says where jobs came from (`source`: `api`, `cache` or `cache+api`), whether the search API was called (`apiCalled`) and how many open jobs there were before the run (`openJobsBefore`). A search's `maxResults` (optional) overrides your `jobsPerSearch`. Jobs you already applied to (same application key) are saved as `SKIPPED` and counted in `skippedAlreadyApplied`. |
 | `GET /api/companies?blacklisted=true&search=`, `POST /api/companies`, `PATCH /api/companies/:id` | Companies. Each one shows `blacklisted` for **your** blacklist; `{"blacklisted":true}` adds it, `false` removes it. |
 | `GET /api/companies/blacklisted` | Your blacklist |
 | `PUT /api/companies/:id/blacklist`, `DELETE /api/companies/:id/blacklist` | Add a company to, or remove it from, your blacklist. Adding it marks your open jobs there as `SKIPPED`. |
@@ -280,15 +281,14 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `GET/PATCH /api/jobs/:id` | Job details. Set the status by hand, e.g. `SAVED`, or `APPLIED` if submission wasn't detected. A "job" here is your application, returned together with its posting's details. |
 | `GET /api/jobs/:id/history` | The job's status history, oldest first (e.g. `FOUND` → `SAVED` → `APPLIED`) |
 | `POST /api/jobs/:id/evaluate?refresh=true` | Re-run the evaluation: fraud likelihood rating first, then the match rating unless fraud is 80 or more. Cached ratings are reused (`cached` in the reply); `refresh=true` asks the AI again. |
-| `GET /api/application-logs?date=YYYY-MM-DD` | Preview the jobs you applied to on a date (default today); nothing is written |
-| `POST /api/application-logs` with `{"date":"YYYY-MM-DD"}` | Write the jobs you applied to on that date (default today) to the Excel log. Running it again updates those rows. |
+| `GET /api/application-logs?date=YYYY-MM-DD` | Preview what the next export would write: with no date, every ledger row not yet in Excel; with a date, that day's rows. Nothing is written to Excel. |
+| `POST /api/application-logs` with `{}` or `{"date":"YYYY-MM-DD"}` | Export the ledger to the Excel log. With no date (the usual end-of-day call), every row added or changed since the last export; with a date, that day's rows. Running it again updates rows instead of duplicating them. |
 | `POST /api/jobs/:id/documents` | Generate or regenerate the resume and cover letter |
 | `GET/PATCH /api/jobs/:id/files` | See or change which resume/cover letter the job uses. `null` switches back to the AI version. |
 | `GET /api/jobs/:id/files/resume`, `.../files/cover-letter` | Download a document |
 | `POST /api/jobs/:id/autofill`, `GET /api/jobs/:id/autofill` | Start auto-fill, or check its status |
 | `GET /api/answers`, `PUT /api/answers/:id`, `DELETE /api/answers/:id` | Saved answers to application questions. Correct one once and it's reused every time. |
 | `GET /api/audit-logs?type=&requestId=&limit=` | Developer log of your requests and API calls |
-
 | `GET /api/spending/summary?month=YYYY-MM` | One month at a glance: AI tokens and estimated cost by action and by model, search credits against your plan's quota, payments, budget status |
 | `GET /api/spending/token-usage?from=&to=&action=&model=` | Every AI call: model, tokens, when, what for, estimated cost (newest first) |
 | `GET /api/spending/token-usage/totals?by=action\|model\|day\|month&from=&to=` | Token and cost totals grouped by action, model, day or month (local time) |
@@ -297,6 +297,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `GET /api/spending/payments?serviceId=&unpaid=true`, `POST`, `PATCH/DELETE /api/spending/payments/:id` | Payments you enter yourself. Fill in `datePaid` once paid: `PATCH {"datePaid":"YYYY-MM-DD"}` |
 | `GET/POST /api/spending/prices`, `PATCH/DELETE /api/spending/prices/:id` | Claude prices used to estimate token costs |
 | `GET/POST /api/spending/budgets`, `PATCH/DELETE /api/spending/budgets/:id` | Monthly spending limits with a warning threshold |
+
 ---
 
 ## Important information
@@ -311,10 +312,14 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
   - **Job match rating** (1–100, higher = better fit): a separate Claude call that never sees the fraud result, scored by Python with the skill's 40/30/10/10/10 rules.
   - **Your search limits** (`minMatchRating`, `maxFraudRating`) then decide which jobs get documents. The ratings themselves never affect each other.
   - **The fraud rating is still a guide.** Check a company yourself before you send personal details.
-- **The application log** (`APPLICATION_LOG_PATH`, default `../docs/AI Job Application Logs.xlsx`) lists only jobs marked `APPLIED` that had a resume made. Saved, skipped, failed and unfinished applications are left out.
-  - **Columns:** date applied, position, company, location, location type, job type, found on, match rating, application link, resume and cover letter (clickable links to the files), and Job ID (used to update a row instead of duplicating it).
-  - **Left out:** fraud rating, user ID and the job's posting date.
-  - **Close the file in Excel** before calling the endpoint, or it returns `423`.
+- **The application log works in two layers.**
+  - **Ledger (written straight away).** The moment a job is marked `APPLIED` (detected on submit, or set by hand), it is recorded in a SQLite file (`APPLICATION_LEDGER_PATH`, default `storage/application-ledger.sqlite`). Each write is one small atomic transaction, so a crash loses at most the application in progress, and Excel being open never blocks it. If a job's status is changed back from `APPLIED`, its ledger row is flagged as withdrawn and the next export removes it from the sheet.
+  - **Excel (exported on demand).** `POST /api/application-logs` rebuilds the workbook (`APPLICATION_LOG_PATH`, default `../docs/AI Job Application Logs.xlsx`) from the ledger, usually once at the end of the day. It first copies any of today's (or that date's) `APPLIED` jobs that are missing from the ledger, as a safety net. It saves to a temporary file and renames it over the workbook, so a crash mid-write can't corrupt it.
+  - **Application key.** Every ledger row has a key such as `JA-3F9A1C07B2D4`, made from your user, the company, the position and the location. Letter case, punctuation, accents, company suffixes (Inc, Ltd) and notes such as "(Remote)" or "- Contract" don't change it. The same job found twice (a re-post, or from the other search API) gets the same key: the log keeps one row (the ledger counts it in `times_applied`), and searches skip it.
+  - **The sheet keeps your layout.** The export writes into the sheet whose header row has "Serial Number" (`Sheet1`) and grows the Excel table on it (`app_logs`) to fit. Columns are found by their header text, so you can reorder them; case and punctuation don't matter. It fills Serial Number (renumbered on every export), Date Applied, Employer, Job Title, Company Website Link, Resume Used (a clickable link to the file), Job Search Platform, Application Status, Work Model / Job Location Type, Job Location and Employment Type. **Cover Letter Used** (a clickable link to the file) and **Application Key** columns are added at the end if your sheet doesn't have them; you can move them anywhere afterwards. Re-exports match rows on Application Key. Rows you type in by hand (no key) are kept. Fields that have no column in your sheet, such as the match rating, apply link and times applied, stay in the ledger.
+  - **Application Status** is set to `Applied` when a row is added and is never overwritten after that, so you can change it yourself as things progress (for example `Interview`, `Offer`, `Rejected`).
+  - **Which jobs appear:** only jobs marked `APPLIED` that had a resume made. Saved, skipped, failed and unfinished applications are left out.
+  - **Close the file in Excel** before exporting, or it returns `423`. Nothing is lost: the rows stay pending in the ledger until the next export.
 - **Caching (to keep API and AI costs down).**
   - **Search results** are cached in `search_cache` for `SEARCH_CACHE_TTL_HOURS` (default 24) and shared by all users, since postings are public. The search API is only called again for a cached search when fewer than `SEARCH_REFRESH_THRESHOLD` (default 20) jobs matching the search are still open: cached jobs you don't have yet, plus your saved jobs from that search with status `FOUND`, `DOCUMENTS_READY`, `FORM_FILLED`, `SAVED` or `INCOMPLETE` (not `APPLIED`, `SKIPPED` or `ERROR`, and not older than the search's date range). That call fetches the **next** page rather than page 1 again, and stops once the provider runs out of pages or `SEARCH_CACHE_MAX_PAGES` is reached. When the entry expires, the next run starts again from page 1 to pick up new postings.
   - **Fraud and match ratings** are cached in `evaluation_cache` and shared across users and re-runs, so a posting is only rated once. Fraud results last `FRAUD_CACHE_TTL_DAYS` (default 14), match results `MATCH_CACHE_TTL_DAYS` (default 30). Editing a base resume, a `SKILL.md`, a `shared-references` file, `fraud.py` or `match.py` invalidates the affected ratings straight away. Change `EVALUATION_CACHE_VERSION` to discard all of them (for example after switching AI models).
@@ -324,11 +329,6 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 
 ---
 
-## Customising the app
-
-| What to change | Where |
-|---|---|
-| How resumes are tailored (tone, keyword placement, which sections change) | Edit the repo's `.agents/skills/*-resume-guidance/SKILL.md` and `shared-references/*.md`. No code changes needed. |
 ## Tracking spending
 
 - **AI tokens are recorded automatically.** Every Claude call (fraud rating, match rating, resume, cover letter, form answers) adds a row to `ai_token_usage`.
@@ -345,12 +345,17 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 - **Budgets** (`POST /api/spending/budgets {"name":"Claude","serviceId":"…","monthlyLimitUsd":20}`) only warn: `/api/spending/summary` shows the percentage used, `warning` and `overLimit`. Nothing is blocked.
   - **What counts against a budget:** payments covering the month, plus, for the Claude service, the month's estimated token cost when no payment is entered yet.
 
+## Customising the app
+
+| What to change | Where |
+|---|---|
+| How resumes are tailored (tone, keyword placement, which sections change) | Edit the repo's `.agents/skills/*-resume-guidance/SKILL.md` and `shared-references/*.md`. No code changes needed. |
 | Base resume used for each track | Update the `resumes/base resumes/...docx` path in that track's `SKILL.md`. The app reads the path from there and otherwise falls back to the highest version number. |
 | Extended skills lists | `shared-references/*-skills-and-tools.md` |
 | Fraud check rules | `.agents/skills/job-post-evaluation/SKILL.md` (for you and agents) and `python-service/app/fraud.py` (`RULES`, `TEXT_PATTERNS`, `POINTS`, `KNOWN_SITES`) for the app |
 | Match rating rules | The same skill and `python-service/app/match.py` (`RULES`, `score()`) |
 | Turn the LinkedIn web search on or off | `FRAUD_WEB_SEARCH` and `FRAUD_MAX_SEARCHES` in `python-service/.env` |
-| Where the application log is written | `APPLICATION_LOG_PATH` in `.env` |
+| Where the application log is written | `APPLICATION_LOG_PATH` (Excel) and `APPLICATION_LEDGER_PATH` (SQLite ledger) in `.env` |
 | Claude model and effort | `python-service/.env`: `AI_MODEL` (default), `AI_MODEL_FRAUD` / `AI_EFFORT_FRAUD`, `AI_MODEL_MATCH` / `AI_EFFORT_MATCH`, `AI_EFFORT_DOCUMENTS`, `AI_EFFORT_ANSWERS` |
 | Cover letter style | The `cover_letter()` prompt in `python-service/app/ai.py` |
 | Cover letter header and layout | `write_cover_letter()` in `python-service/app/documents.py`. The header (name and contact line) is copied from the tailored resume, so editing your base resume's header changes it in every new letter. The code always adds the date, recipient block, `Re:` line, greeting and signature; the AI writes only the body. |

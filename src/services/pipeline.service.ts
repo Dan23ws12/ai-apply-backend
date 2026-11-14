@@ -11,6 +11,7 @@ import { jobInclude, setStatus, upsertPosting } from "./jobs.service.js";
 import { getUserSettings } from "./settings.service.js";
 import { DAY_MS, MAX_AGE_DAYS, pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
 import { normalizeCompanyName } from "./search/normalize.js";
+import { applicationKey, findApplied } from "./applicationLedger.service.js";
 
 interface Ctx {
   userId: string;
@@ -74,6 +75,7 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
   const owned = await ownExternalIds(outcome.jobs.map((j) => j.externalId));
   const newJobIds: string[] = [];
   let skipped = 0;
+  let skippedApplied = 0;
 
   for (const j of outcome.jobs) {
     if (newJobIds.length >= limit) break;
@@ -92,8 +94,14 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
     if (!applyOption) continue;
     const listedOn = j.applyOptions.find((o) => criteria.websites.includes(o.website)) ?? apply;
     const blacklisted = blockedNames.has(normalizedName);
-    const status = blacklisted ? ("SKIPPED" as const) : ("FOUND" as const);
-    const statusMessage = blacklisted ? "Company is blacklisted" : null;
+    // Same position, company and location already applied to (e.g. a re-post, or found by the other search API).
+    const appliedBefore = blacklisted ? null : findApplied(applicationKey(ctx.userId, j.companyName, j.positionName, j.location));
+    const status = blacklisted || appliedBefore ? ("SKIPPED" as const) : ("FOUND" as const);
+    const statusMessage = blacklisted
+      ? "Company is blacklisted"
+      : appliedBefore
+        ? `Already applied (${appliedBefore.applicationKey} on ${appliedBefore.dateApplied.toISOString().slice(0, 10)})`
+        : null;
 
     const app = await prisma.application.create({
       data: {
@@ -107,8 +115,10 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
         statusEvents: { create: { fromStatus: null, toStatus: status, message: statusMessage ?? "Found by search" } },
       },
     });
-    // Blacklisted jobs are saved as SKIPPED (so they are not offered again) but don't use up the limit.
+    // Blacklisted and already-applied jobs are saved as SKIPPED (so they are not offered again)
+    // but don't use up the limit.
     if (blacklisted) skipped++;
+    else if (appliedBefore) skippedApplied++;
     else newJobIds.push(app.id);
   }
 
@@ -126,6 +136,7 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
     limit,
     saved: newJobIds.length,
     skippedBlacklisted: skipped,
+    skippedAlreadyApplied: skippedApplied,
     jobIds: newJobIds,
     ...(outcome.warning ? { warning: outcome.warning } : {}),
   };

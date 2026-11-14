@@ -53,6 +53,8 @@ const EnvSchema = z.object({
 
   /** Excel workbook that POST /api/application-logs writes applied jobs to. Relative paths start at the backend folder. */
   APPLICATION_LOG_PATH: z.string().default("../docs/AI Job Application Logs.xlsx"),
+  /** SQLite file that records each application the moment it is marked APPLIED (source of truth for the Excel log). */
+  APPLICATION_LEDGER_PATH: z.string().default("./storage/application-ledger.sqlite"),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

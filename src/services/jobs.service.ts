@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { notFound } from "../lib/errors.js";
 import type { ApplicationStatus, Prisma } from "../generated/prisma/client.js";
 import type { NormalizedJob } from "./search/types.js";
+import { onStatusChanged } from "./applicationLog.service.js";
 
 /**
  * Jobs are stored in two parts (see prisma/schema.prisma):
@@ -74,8 +75,8 @@ type ExtraData = Omit<Prisma.ApplicationUncheckedUpdateInput, "applicationStatus
  * Changes an application's status and records the change in application_status_events.
  * Use this for every status change so the history stays complete.
  */
-export function setStatus(id: string, status: ApplicationStatus, extra: ExtraData = {}) {
-  return prisma.$transaction(async (tx) => {
+export async function setStatus(id: string, status: ApplicationStatus, extra: ExtraData = {}) {
+  const { updated, previous } = await prisma.$transaction(async (tx) => {
     const current = await tx.application.findUniqueOrThrow({ where: { id }, select: { applicationStatus: true } });
     const updated = await tx.application.update({ where: { id }, data: { ...extra, applicationStatus: status } });
     if (current.applicationStatus !== status) {
@@ -88,8 +89,11 @@ export function setStatus(id: string, status: ApplicationStatus, extra: ExtraDat
         },
       });
     }
-    return updated;
+    return { updated, previous: current.applicationStatus };
   });
+  // After the commit: log the application in the SQLite ledger straight away (never throws).
+  if (status === "APPLIED" || previous === "APPLIED") await onStatusChanged(id, status, previous);
+  return updated;
 }
 
 /** setStatus for many applications at once (e.g. when a company is blacklisted). */

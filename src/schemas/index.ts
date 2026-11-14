@@ -167,6 +167,6 @@ const IsoDate = z
     const dt = new Date(y, m - 1, d);
     return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
   }, "Not a real date");
-/** date = the day you applied (local time). Leave it out for today. */
+/** date = the day you applied (local time). Leave it out for every row not yet written to Excel. */
 export const ApplicationLogBody = z.object({ date: IsoDate.optional() });
 export const ApplicationLogQuery = z.object({ date: IsoDate.optional() });
