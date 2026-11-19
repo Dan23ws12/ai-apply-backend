@@ -29,11 +29,11 @@ job posting: __job_website__
 
 Save the file at:
 
-`resumes/jb resumes/{position}-{company}.docx`
+`application-docs/{position} - {company} - {id}/Resume.docx`
 
-Use the position and company from the request. Example: `Business Intelligence Analyst-OpenCircle Contractors Association.docx`.
+Use the position and company from the request, plus an id you can search on the job site (Indeed `jk`, LinkedIn job id, or Glassdoor `jobListingId`). Example: `application-docs/Business Intelligence Analyst - OpenCircle Contractors Association - indeed-abc123def4567890/Resume.docx`.
 
-Replace that file when regenerating the same position and company. Never modify `resumes/base resumes/admin_assistant_resume_v2.1.0.docx`.
+Replace `Resume.docx` in that folder when regenerating the same position, company, and id. Never modify `resumes/base resumes/admin_assistant_resume_v2.1.0.docx`.
 
 ## Before writing
 

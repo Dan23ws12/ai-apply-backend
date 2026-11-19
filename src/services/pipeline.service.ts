@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
+import path from "node:path";
 import { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
@@ -262,6 +264,43 @@ function savedMatch(details: unknown): { resume_category: string; keywords: stri
   return null;
 }
 
+/** A file inside an application-docs subfolder (not the application-docs root itself). */
+function isApplicationDoc(filePath: string): boolean {
+  const parts = path.normalize(filePath).split(path.sep).filter(Boolean);
+  const idx = parts.lastIndexOf("application-docs");
+  return idx >= 0 && idx < parts.length - 2;
+}
+
+/**
+ * Removes the previous AI resume and cover letter when regeneration writes a different folder.
+ * Only paths that still match the stored AI links and sit under application-docs are deleted.
+ * Uploads and older files in resumes/jb resumes or cover-letters are left alone.
+ */
+function removeReplacedAiFolder(oldPaths: Array<string | null | undefined>, newResumePath: string) {
+  const newDir = path.resolve(path.dirname(newResumePath));
+  const dirs = new Set<string>();
+  for (const file of oldPaths) {
+    if (!file || !isApplicationDoc(file)) continue;
+    const dir = path.resolve(path.dirname(file));
+    if (dir === newDir) continue;
+    dirs.add(dir);
+    try {
+      if (existsSync(file)) unlinkSync(file);
+    } catch (err) {
+      logger.warn({ err, file }, "Could not remove the previous application document");
+    }
+  }
+  for (const dir of dirs) {
+    try {
+      const note = path.join(dir, "job.txt");
+      if (existsSync(note)) unlinkSync(note);
+      if (readdirSync(dir).length === 0) rmdirSync(dir);
+    } catch (err) {
+      logger.warn({ err, dir }, "Could not remove the previous application folder");
+    }
+  }
+}
+
 /** Creates a tailored resume + cover letter and stores the links in application_files. */
 export async function generateDocuments(
   jobId: string,
@@ -305,6 +344,8 @@ export async function generateDocuments(
     create: { applicationId: jobId, ...data },
     update: data,
   });
+
+  removeReplacedAiFolder([existing?.aiResumeLink, existing?.aiCoverLetterLink], docs.resume_path);
 
   await setStatus(jobId, "DOCUMENTS_READY", { statusMessage: null });
   return files;

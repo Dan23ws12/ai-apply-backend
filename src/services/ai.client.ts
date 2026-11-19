@@ -49,6 +49,12 @@ export interface JobForAi {
   location?: string | null;
   apply_url?: string | null;
   publisher?: string | null;
+  /** Provider posting id (`jsearch:…` / `serpapi:…`). Documents only. */
+  external_id?: string | null;
+  /** Every apply link on the posting, chosen link first. Documents only. */
+  apply_urls?: string[];
+  /** Board this application was found on. Documents only. */
+  search_website?: string | null;
 }
 
 export interface ApplicantForAi {

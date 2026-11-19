@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 from docx import Document
 from docx.shared import Pt
@@ -121,6 +122,145 @@ def _safe(name: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip().rstrip(".")[:80] or "job"
 
 
+# Folder names stay short enough for Windows. Title and company shrink first; ids stay intact.
+FOLDER_NAME_MAX = 160
+
+_INDEED_JK = re.compile(r"[?&]jk=([A-Za-z0-9]+)")
+_LINKEDIN_VIEW = re.compile(r"/jobs/view/(?:[^/?#]*-)?(\d{5,})(?:/|$|[?#])")
+_LINKEDIN_CURRENT = re.compile(r"[?&]currentJobId=(\d+)")
+_GLASSDOOR_LISTING = re.compile(r"[?&]jobListingId=(\d+)", re.IGNORECASE)
+
+
+def _host(url: str) -> str:
+    try:
+        return urlparse(url).netloc.lower()
+    except ValueError:
+        return ""
+
+
+def _ids_in_url(url: str) -> list[tuple[str, str]]:
+    """Board-searchable ids in one apply link: (board, token)."""
+    host = _host(url)
+    found: list[tuple[str, str]] = []
+    if "indeed." in host:
+        m = _INDEED_JK.search(url)
+        if m:
+            found.append(("indeed", m.group(1)))
+    if "linkedin." in host:
+        m = _LINKEDIN_VIEW.search(url) or _LINKEDIN_CURRENT.search(url)
+        if m:
+            found.append(("linkedin", m.group(1)))
+    if "glassdoor." in host:
+        m = _GLASSDOOR_LISTING.search(url)
+        if m:
+            found.append(("glassdoor", m.group(1)))
+    return found
+
+
+def _preferred_board(search_website: str | None) -> str | None:
+    site = (search_website or "").strip().lower()
+    if "indeed" in site:
+        return "indeed"
+    if "linkedin" in site:
+        return "linkedin"
+    if "glassdoor" in site:
+        return "glassdoor"
+    return None
+
+
+def _fallback_job_id(external_id: str | None) -> str:
+    """Short provider id when the apply links have no Indeed, LinkedIn, or Glassdoor key."""
+    raw = (external_id or "").strip()
+    if ":" in raw:
+        raw = raw.split(":", 1)[1]
+    token = re.sub(r"[^A-Za-z0-9_-]+", "", raw)[:24]
+    return f"job-{token}" if token else "job-unknown"
+
+
+def board_ids(job: Job) -> list[str]:
+    """Up to three ids. The board this application was found on comes first."""
+    urls: list[str] = []
+    if job.apply_url:
+        urls.append(job.apply_url)
+    for url in job.apply_urls:
+        if url and url not in urls:
+            urls.append(url)
+
+    preferred = _preferred_board(job.search_website)
+    ranked: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    order = 0
+    for url in urls:
+        for board, token in _ids_in_url(url):
+            label = f"{board}-{token}"
+            if label in seen:
+                continue
+            seen.add(label)
+            rank = 0 if preferred and board == preferred else 1
+            ranked.append((rank, order, label))
+            order += 1
+    ranked.sort()
+    labels = [label for _, _, label in ranked[:3]]
+    return labels or [_fallback_job_id(job.external_id)]
+
+
+def application_folder_name(job: Job, ids: list[str] | None = None) -> str:
+    """`{position} - {company} - {ids}`, capped so the ids are never trimmed away."""
+    labels = ids if ids is not None else board_ids(job)
+    id_part = " - ".join(labels)
+    # Room for "{title} - {company} - " in front of the ids.
+    prefix_budget = FOLDER_NAME_MAX - len(id_part) - 3
+    title = _safe(job.title)
+    company = _safe(job.company)
+    room = prefix_budget - 3  # the " - " between title and company
+    if room < 3:
+        return id_part[:FOLDER_NAME_MAX].rstrip(" .-") or "job"
+    while len(title) + len(company) > room and (len(title) > 1 or len(company) > 1):
+        if len(title) >= len(company) and len(title) > 1:
+            title = title[:-1]
+        elif len(company) > 1:
+            company = company[:-1]
+        else:
+            title = title[:-1]
+    title = title.rstrip(" .") or "job"
+    company = company.rstrip(" .") or "co"
+    name = f"{title} - {company} - {id_part}"
+    if len(name) <= FOLDER_NAME_MAX:
+        return name
+    return id_part[:FOLDER_NAME_MAX].rstrip(" .") or "job"
+
+
+def _apply_urls(job: Job) -> list[str]:
+    urls: list[str] = []
+    if job.apply_url:
+        urls.append(job.apply_url)
+    for url in job.apply_urls:
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def write_job_note(folder: Path, req: DocumentsRequest, ids: list[str]) -> None:
+    """Plain-text note for searching the folder. Not uploaded with the application."""
+    job = req.job
+    lines = [
+        f"Position: {job.title}",
+        f"Company: {job.company}",
+        f"Search website: {job.search_website or ''}",
+        "Board ids:",
+        *(f"- {label}" for label in ids),
+        f"External id: {job.external_id or ''}",
+        f"Application id: {req.job_id}",
+        "Apply links:",
+        *(f"- {url}" for url in _apply_urls(job)),
+    ]
+    if not ids:
+        lines.insert(4, "-")
+    if not _apply_urls(job):
+        lines.append("-")
+    (folder / "job.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 # ───────────────────────── public API ─────────────────────────
 
 def build_documents(req: DocumentsRequest) -> dict:
@@ -146,16 +286,19 @@ def build_documents(req: DocumentsRequest) -> dict:
         anchor.paragraph._p.addnext(new_p)
         _apply(ParaInfo(-1, anchor.section, "bullet", Paragraph(new_p, anchor.paragraph._parent)), nb.text, nb.bold_terms)
 
-    # Same naming as the resume skills: "{position}-{company}.docx".
-    # Regenerating the same position and company replaces the file.
-    stem = f"{_safe(req.job.title)}-{_safe(req.job.company)}"
-    resume_path = settings.resume_out / f"{stem}.docx"
+    # One folder per posting: "{position} - {company} - {board ids}".
+    # Regenerating the same posting replaces Resume.docx, Cover Letter.docx, and job.txt.
+    ids = board_ids(req.job)
+    folder = settings.application_docs / application_folder_name(req.job, ids)
+    folder.mkdir(parents=True, exist_ok=True)
+    resume_path = folder / "Resume.docx"
     doc.save(str(resume_path))
 
     resume_text = "\n".join(p.text for p in Document(str(resume_path)).paragraphs if p.text.strip())
     letter = ai.cover_letter(req.resume_category, req.job, req.applicant, resume_text)
-    cover_path = settings.cover_letter_out / f"{stem}.docx"
+    cover_path = folder / "Cover Letter.docx"
     write_cover_letter(cover_path, resume_path, req.applicant, req.job, letter)
+    write_job_note(folder, req, ids)
 
     return {
         "resume_path": str(resume_path),

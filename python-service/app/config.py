@@ -6,7 +6,13 @@ SERVICE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=SERVICE_DIR / ".env", extra="ignore")
+    # Reads the backend's .env first, then python-service/.env, which wins when both set a value.
+    # Empty values are ignored, so a key (e.g. ANTHROPIC_API_KEY) can live in either file.
+    model_config = SettingsConfigDict(
+        env_file=(SERVICE_DIR.parent / ".env", SERVICE_DIR / ".env"),
+        env_ignore_empty=True,
+        extra="ignore",
+    )
 
     anthropic_api_key: str = ""
     ai_model: str = "claude-opus-5-5"
@@ -34,12 +40,11 @@ class Settings(BaseSettings):
 
     python_service_token: str
 
-    # Repo root: holds .agents/skills, shared-references, resumes/ and cover-letters/.
+    # Repo root: holds .agents/skills, shared-references, resumes/ and application-docs/.
     # A relative path is resolved from the python-service folder.
     project_root: Path = Path("..")
-    # Output folders. Relative paths are resolved from project_root.
-    resume_output_dir: Path = Path("resumes/jb resumes")
-    cover_letter_output_dir: Path = Path("cover-letters")
+    # One folder per application. A relative path is resolved from project_root.
+    application_docs_dir: Path = Path("application-docs")
 
     @property
     def root(self) -> Path:
@@ -52,12 +57,8 @@ class Settings(BaseSettings):
         return path
 
     @property
-    def resume_out(self) -> Path:
-        return self._output(self.resume_output_dir)
-
-    @property
-    def cover_letter_out(self) -> Path:
-        return self._output(self.cover_letter_output_dir)
+    def application_docs(self) -> Path:
+        return self._output(self.application_docs_dir)
 
 
 settings = Settings()  # type: ignore[call-arg]

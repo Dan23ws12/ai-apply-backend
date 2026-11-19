@@ -57,10 +57,13 @@ AI Job Apply Project/
 ├── README.md
 ├── .agents/skills/           # Resume skills and the job-post-evaluation skill (fraud + match rules)
 ├── shared-references/        # Existing format rules and extended skills lists (read by the AI)
+├── application-docs/         # ★ One folder per application: "{position} - {company} - {ids}/"
+│   └── Software Engineer - Acme - indeed-abc123/
+│       ├── Resume.docx
+│       ├── Cover Letter.docx
+│       └── job.txt
 ├── resumes/
-│   ├── base resumes/         # Your base resumes (copied, never changed)
-│   └── jb resumes/           # ★ Tailored resumes the app creates: "{position}-{company}.docx"
-├── cover-letters/            # ★ Cover letters the app creates: "{position}-{company}.docx"
+│   └── base resumes/         # Your base resumes (copied, never changed)
 ├── Job_APIs_and_Scrapers_Comparison.md
 ├── package.json              # Node scripts and dependencies
 ├── tsconfig.json
@@ -108,7 +111,7 @@ AI Job Apply Project/
     └── application-ledger.sqlite  # Every applied job, recorded the moment it is marked APPLIED
 ```
 
-Generated documents use the same naming as the resume skills: `{position}-{company}.docx`. Generating documents again for the same position and company replaces both files. Characters Windows doesn't allow in file names (such as `/` or `:`) are replaced with spaces. To save the documents somewhere else, change `RESUME_OUTPUT_DIR` and `COVER_LETTER_OUTPUT_DIR` in `python-service/.env`.
+Each application gets a folder under `application-docs` named `{position} - {company} - {ids}`. The ids are the job-board keys parsed from the apply links (Indeed `jk`, LinkedIn job id, Glassdoor `jobListingId`), up to three, with the board you found the job on listed first. If none of those are in the links, the folder uses a shortened provider job id (`job-…`) so two postings with the same title and company stay apart. Inside the folder: `Resume.docx`, `Cover Letter.docx`, and `job.txt` (position, company, ids, and the full apply links). Generating documents again for the same posting replaces those three files. Characters Windows doesn't allow in file names (such as `/` or `:`) are replaced with spaces, and the folder name stays within about 160 characters by shortening the position and company before the ids. To save the documents somewhere else, change `APPLICATION_DOCS_DIR` in `python-service/.env`.
 
 The Python service reuses files that already exist in this repository:
 
@@ -128,7 +131,7 @@ The Python service reuses files that already exist in this repository:
 |---|---|---|---|
 | `JSEARCH_API_KEY` | [RapidAPI → JSearch](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch). Subscribe to a plan (there's a free tier) and copy `X-RapidAPI-Key`. | `.env` | Yes, unless you only use SerpApi |
 | `SERPAPI_API_KEY` | [serpapi.com/manage-api-key](https://serpapi.com/manage-api-key) (free tier: 100 searches a month) | `.env` | Recommended as the backup |
-| `ANTHROPIC_API_KEY` | [platform.claude.com → API keys](https://platform.claude.com/settings/keys) | `python-service/.env` | Yes |
+| `ANTHROPIC_API_KEY` | [platform.claude.com → API keys](https://platform.claude.com/settings/keys) | `.env` or `python-service/.env` (the Python service reads both; a value in `python-service/.env` wins) | Yes |
 | `JWT_SECRET` | Generate it yourself (command below) | `.env` | Yes |
 | `CREDENTIALS_ENCRYPTION_KEY` | Generate it yourself (command below). **If you lose it, your saved job-site logins can't be read.** | `.env` | Yes |
 | `PYTHON_SERVICE_TOKEN` | Any long random string. It must be **the same** in both `.env` files. | both | Yes |
@@ -220,7 +223,7 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 ```
-Fill in `ANTHROPIC_API_KEY` and `PYTHON_SERVICE_TOKEN` (the same token as in `../.env`).
+Fill in `PYTHON_SERVICE_TOKEN` (the same token as in `../.env`). Put `ANTHROPIC_API_KEY` in either `../.env` or this file: the service also reads `../.env` and ignores empty values.
 
 ### 4. Start both services (two terminals)
 
@@ -401,7 +404,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | Claude model and effort | `python-service/.env`: `AI_MODEL` (default), `AI_MODEL_FRAUD` / `AI_EFFORT_FRAUD`, `AI_MODEL_MATCH` / `AI_EFFORT_MATCH`, `AI_EFFORT_DOCUMENTS`, `AI_EFFORT_ANSWERS` |
 | Cover letter style | The `cover_letter()` prompt in `python-service/app/ai.py` |
 | Cover letter header and layout | `write_cover_letter()` in `python-service/app/documents.py`. The header (name and contact line) is copied from the tailored resume, so editing your base resume's header changes it in every new letter. The code always adds the date, recipient block, `Re:` line, greeting and signature; the AI writes only the body. |
-| Where resumes and cover letters are saved | `RESUME_OUTPUT_DIR` and `COVER_LETTER_OUTPUT_DIR` in `python-service/.env` (defaults: `resumes/jb resumes` and `cover-letters`) |
+| Where resumes and cover letters are saved | `APPLICATION_DOCS_DIR` in `python-service/.env` (default: `application-docs/{position} - {company} - {ids}/`) |
 | Answers to common questions (relocation, pronouns, etc.) | `extraAnswers` in your profile, or `PUT /api/answers/:id` |
 | Which job sites count | `websites` in each search (`LINKEDIN`, `GLASSDOOR`, `INDEED`, `COMPANY_SITE`, `OTHER`) |
 | Match and fraud limits | `minMatchRating` / `maxFraudRating` in each search |

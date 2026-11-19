@@ -48,11 +48,17 @@ export function postingForAi(posting: PostingWithCompany & { applyOptions: JobAp
 
 /** The posting plus this user's chosen apply link (for documents and form answers). */
 export function jobForAi(app: {
-  posting: PostingWithCompany;
+  posting: PostingWithCompany & { applyOptions?: { url: string }[] };
   applyOption: JobApplyOption;
   searchWebsite: string;
 }): JobForAi {
   const p = app.posting;
+  const applyUrls: string[] = [];
+  const addUrl = (url: string | null | undefined) => {
+    if (url && !applyUrls.includes(url)) applyUrls.push(url);
+  };
+  addUrl(app.applyOption.url);
+  for (const option of p.applyOptions ?? []) addUrl(option.url);
   return {
     title: p.positionName,
     company: p.company?.name ?? p.companyName,
@@ -61,5 +67,8 @@ export function jobForAi(app: {
     location: p.location,
     apply_url: app.applyOption.url,
     publisher: app.searchWebsite,
+    external_id: p.externalId,
+    apply_urls: applyUrls,
+    search_website: app.searchWebsite,
   };
 }

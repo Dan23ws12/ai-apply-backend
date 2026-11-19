@@ -18,6 +18,10 @@ class Job(BaseModel):
     location: str | None = None
     apply_url: str | None = None
     publisher: str | None = None
+    # Used only to name the application folder. Fraud and match do not send these.
+    external_id: str | None = None
+    apply_urls: list[str] = Field(default_factory=list)
+    search_website: str | None = None
 
 
 class Applicant(BaseModel):
