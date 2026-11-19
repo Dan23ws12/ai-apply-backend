@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: jobapply
       POSTGRES_DB: jobapply
     ports:
-      - "5432:5432"
+      - "5433:5432" # host port 5433: a Windows PostgreSQL service already uses 5432
     volumes:
       - pgdata:/var/lib/postgresql/data
 volumes:

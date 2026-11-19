@@ -59,7 +59,7 @@ def _error(e: Exception, status: int = 502) -> HTTPException:
     elif isinstance(e, anthropic.APIConnectionError):
         msg = "Could not reach the Claude API"
     elif isinstance(e, TypeError) and "authentication" in str(e).lower():
-        msg = "No Claude credentials found. Set ANTHROPIC_API_KEY in python-service/.env"
+        msg = "No Claude credentials found. Set ANTHROPIC_API_KEY in the backend .env or python-service/.env"
     else:
         msg = str(e)
     return HTTPException(status_code=status, detail={"message": msg, "usage": getattr(e, "usage", [])})

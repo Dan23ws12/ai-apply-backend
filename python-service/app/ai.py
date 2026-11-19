@@ -57,7 +57,7 @@ def _ask(system: list[dict], user: str, output: type[T], effort: str, max_tokens
         raise AIError("Could not reach the Claude API") from e
     except TypeError as e:
         if "authentication" in str(e).lower():
-            raise AIError("No Claude credentials found. Set ANTHROPIC_API_KEY in python-service/.env") from e
+            raise AIError("No Claude credentials found. Set ANTHROPIC_API_KEY in the backend .env or python-service/.env") from e
         raise
 
     usage.record(response, action, started)
