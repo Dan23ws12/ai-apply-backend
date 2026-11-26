@@ -11,7 +11,7 @@ description: >-
   worth applying to.
 metadata:
   author: Daniel Oyeleye
-  version: "2.0"
+  version: "2.1"
 ---
 
 # Job post evaluation
@@ -46,7 +46,7 @@ Use only the posting, the company website, the posting site and what you find ab
 
 1. **Accept** the company website, the name of the position, the company, and the job posting page. If the company website is not given, look for it in the posting or search for it.
 2. **Scrape** the job description off the job posting page (Step 1 above). Note anything that looks wrong, such as no duties, no company details or copied text.
-3. **Search** for the company name on LinkedIn. Check that a company page exists and that its size, industry and location fit the posting.
+3. **Search** for the company name on the web, and search for it again on LinkedIn. Check that the company can be found online and that a LinkedIn company page exists whose size, industry and location fit the posting. A search that was not run does not count as the company being missing.
 4. **Check** that the company name on the website and on the job posting are the same. This check does not apply to recruitment agencies posting for a client.
 5. **Check the validity of the job posting website**: it uses HTTPS, the link works, and the domain is the company's own domain, a known job board (LinkedIn, Glassdoor, Indeed) or a known applicant tracking system (Greenhouse, Lever, Workday, Ashby, SmartRecruiters and similar). Look-alike domains (for example `shopify-careers-onboarding.net`) are a red flag.
 6. **Evaluate** whether the job posting is fraudulent, give the rating, and explain the findings.
@@ -58,7 +58,7 @@ List every red flag you confirm, with its weight:
 | Weight | Red flags | Points |
 |---|---|---|
 | Critical | Asks the applicant to pay anything (fees, training, equipment from a "vendor"); sends a cheque to deposit or forward; asks for banking details, a SIN/SSN or ID before a written offer | 45 |
-| High | Interview only through a chat app (Telegram, WhatsApp, Signal); company email on a free domain (Gmail, Outlook, Yahoo); posting or apply link on a look-alike or unrelated domain; company name does not match the website (not a recruitment agency); no trace of the company on LinkedIn or the web | 25 |
+| High | Interview only through a chat app (Telegram, WhatsApp, Signal); company email on a free domain (Gmail, Outlook, Yahoo); posting or apply link on a look-alike or unrelated domain; company name does not match the website (not a recruitment agency); no company page on LinkedIn after a search; no trace of the company on the web after a search | 25 |
 | Medium | Pay far above the market for the duties; vague duties with no company details; "no experience needed" with high pay; the posting site does not work or has no HTTPS | 10 |
 | Low | Urgency or pressure wording ("urgent", "start immediately"); spelling and grammar problems; very short posting | 4 |
 
@@ -68,7 +68,8 @@ Recruitment agencies, remote work and a missing salary are **not** red flags by 
 
 1. Start at 1 and add the points for every confirmed red flag.
 2. If there is at least one critical red flag, the rating is **at least 80**.
-3. The highest rating is 100.
+3. If a search was done and the company has no LinkedIn page, or a search was done and the company cannot be found on the web, the rating is **at least 80**. Count these as two separate red flags. A check that was not run is not the same as not finding the company, and it does not raise the rating.
+4. The highest rating is 100.
 
 | Rating | Meaning |
 |---|---|
@@ -262,7 +263,7 @@ Give the fraud likelihood rating first, then the match rating. Keep both short a
 
 ```
 Fraud likelihood rating: 12/100 (No real concerns found)
-Checked: <LinkedIn page found / not found>, <company name matches website / does not>, <posting site: known job board, company domain or look-alike>
+Checked: <LinkedIn page found / not found / not searched>, <company found on the web / not found / not searched>, <company name matches website / does not>, <posting site: known job board, company domain or look-alike>
 Red flags: <each confirmed flag with its weight, or "none">
 Reasoning: <two or three short sentences>
 ```

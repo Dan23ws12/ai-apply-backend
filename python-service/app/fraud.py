@@ -60,6 +60,9 @@ class FraudFlag(BaseModel):
 class FraudJudgments(BaseModel):
     linkedin: Literal["found", "not_found", "not_checked"] = Field(
         description="Result of searching for the company on LinkedIn")
+    company_on_web: Literal["found", "not_found", "not_checked"] = Field(
+        default="not_checked",
+        description="Result of searching for the company on the web, apart from LinkedIn. not_checked when no search was run")
     company_name_matches: Literal["yes", "no", "recruitment_agency", "unknown"] = Field(
         description="Company name on the website vs the posting")
     posting_site: Literal["company_domain", "job_board", "applicant_tracking_system", "lookalike_or_unrelated", "broken", "unknown"]
@@ -232,9 +235,11 @@ real.
 Steps (already done by a program where noted):
 1. Inputs: company website, position, company, job posting page (given).
 2. Job description (given; may include text scraped from the posting page).
-3. Search for the company name on LinkedIn. If a web search tool is available, use it
-   (for example: "<company> LinkedIn"). Check that a company page exists and that its size,
-   industry and location fit the posting. If no tool is available, answer not_checked.
+3. Search for the company twice when a web search tool is available: once for the company
+   on the web ("<company>"), and once for its LinkedIn page ("<company> LinkedIn"). A
+   company page must exist; its size, industry and location should fit the posting.
+   Set linkedin and company_on_web to found or not_found from those searches. If no tool
+   is available, set both to not_checked. not_checked is not a red flag.
 4. Company name on the website vs on the posting (program finding given). Recruitment
    agencies posting for a client are fine.
 5. Validity of the posting website (program findings given): HTTPS, link works, company
@@ -247,7 +252,12 @@ Red flag weights:
   written offer.
 - high: interview only through a chat app; company email on a free domain; posting or
   apply link on a look-alike or unrelated domain; company name does not match the website
-  (not an agency); no trace of the company on LinkedIn or the web.
+  (not an agency); no company page on LinkedIn after a search; no trace of the company
+  on the web after a search. These last two are separate flags. If linkedin is not_found,
+  include a high flag "No company page found on LinkedIn". If company_on_web is not_found,
+  include a high flag "No trace of the company on the web". A program then raises the
+  rating to at least 80 for either flag. Do not add either flag when the check was
+  not_checked.
 - medium: pay far above the market for the duties; vague duties and no company details;
   "no experience needed" with high pay; posting site broken or without HTTPS.
 - low: urgency wording; spelling/grammar problems; very short posting.
@@ -258,7 +268,8 @@ calculates the rating from your red flags."""
 
 JSON_INSTRUCTION = (
     "When you have finished checking, reply with ONLY one JSON object (no other text) with "
-    "these keys: linkedin (found|not_found|not_checked), company_name_matches "
+    "these keys: linkedin (found|not_found|not_checked), company_on_web "
+    "(found|not_found|not_checked), company_name_matches "
     "(yes|no|recruitment_agency|unknown), posting_site (company_domain|job_board|"
     "applicant_tracking_system|lookalike_or_unrelated|broken|unknown), red_flags (list of "
     "{flag, weight: critical|high|medium|low}), reasoning (two or three short sentences)."
@@ -321,7 +332,7 @@ def _without_tools(client: anthropic.Anthropic, user: str) -> FraudJudgments:
     response = client.messages.parse(
         model=settings.fraud_model,
         max_tokens=6000,
-        system=[{"type": "text", "text": RULES + "\n\nNo web search tool is available: set linkedin to not_checked.",
+        system=[{"type": "text", "text": RULES + "\n\nNo web search tool is available: set linkedin and company_on_web to not_checked.",
                  "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user}],
         output_config={"effort": settings.ai_effort_fraud},
@@ -335,12 +346,69 @@ def _without_tools(client: anthropic.Anthropic, user: str) -> FraudJudgments:
 
 # ───────────────────────── rating (script) ─────────────────────────
 
-def fraud_rating(flags: list[FraudFlag]) -> int:
-    """1 = no red flags. Each confirmed flag adds its points; any critical flag means at least 80."""
+LINKEDIN_ABSENT_FLAG = "No company page found on LinkedIn"
+WEB_ABSENT_FLAG = "No trace of the company on the web"
+# Either finding is a high fraud likelihood: very likely a scam, and the match rating is skipped.
+NO_PRESENCE_FLOOR = SKIP_MATCH_AT
+
+
+def _linkedin_absence(flag: str) -> bool:
+    text = flag.lower()
+    if "linkedin" not in text:
+        return False
+    return any(p in text for p in (
+        "no company page",
+        "no linkedin",
+        "no page on linkedin",
+        "not found",
+        "cannot be found",
+        "can't be found",
+        "could not find",
+        "could not be found",
+        "no trace",
+        "without a linkedin",
+        "without a company page",
+        "missing linkedin",
+    ))
+
+
+def _web_absence(flag: str) -> bool:
+    text = flag.lower()
+    return any(p in text for p in (
+        "no trace of the company",
+        "not found on the web",
+        "cannot be found on the web",
+        "no web presence",
+        "not found online",
+        "no online presence",
+        "cannot be found on the net",
+    ))
+
+
+def _ensure_presence_flags(judgments: FraudJudgments) -> list[FraudFlag]:
+    """A failed search is a red flag even when the model forgets to list it. A skipped search is not."""
+    flags = list(judgments.red_flags)
+    if judgments.linkedin == "not_found" and not any(_linkedin_absence(f.flag) for f in flags):
+        flags.append(FraudFlag(flag=LINKEDIN_ABSENT_FLAG, weight="high"))
+    if judgments.company_on_web == "not_found" and not any(_web_absence(f.flag) for f in flags):
+        flags.append(FraudFlag(flag=WEB_ABSENT_FLAG, weight="high"))
+    return flags
+
+
+def fraud_rating(flags: list[FraudFlag]) -> tuple[int, bool]:
+    """1 = no red flags. Each confirmed flag adds its points.
+
+    Any critical flag, or a confirmed failure to find the company on LinkedIn or on the web,
+    means at least 80. The second value is true when that presence floor is what raised it.
+    """
     rating = 1 + sum(POINTS[f.weight] for f in flags)
     if any(f.weight == "critical" for f in flags):
         rating = max(rating, SKIP_MATCH_AT)
-    return max(1, min(100, rating))
+    raised_for_presence = False
+    if any(_linkedin_absence(f.flag) or _web_absence(f.flag) for f in flags) and rating < NO_PRESENCE_FLOOR:
+        rating = NO_PRESENCE_FLOOR
+        raised_for_presence = True
+    return max(1, min(100, rating)), raised_for_presence
 
 
 def evaluate_fraud(client: anthropic.Anthropic, req: FraudRequest) -> FraudResult:
@@ -355,15 +423,19 @@ def evaluate_fraud(client: anthropic.Anthropic, req: FraudRequest) -> FraudResul
     if judgments is None:
         judgments = _without_tools(client, user)
 
-    rating = fraud_rating(judgments.red_flags)
-    flags_text = "; ".join(f"{f.flag} ({f.weight})" for f in judgments.red_flags) or "none"
+    flags = _ensure_presence_flags(judgments)
+    rating, raised_for_presence = fraud_rating(flags)
+    flags_text = "; ".join(f"{f.flag} ({f.weight})" for f in flags) or "none"
     reasoning = f"{judgments.reasoning} Red flags: {flags_text}."
+    if raised_for_presence:
+        reasoning += " The rating is at least 80 because the company could not be found on LinkedIn or on the web."
     return FraudResult(
         fraud_rating=rating,
         reasoning=reasoning,
-        red_flags=judgments.red_flags,
+        red_flags=flags,
         checks={
             "linkedin": judgments.linkedin,
+            "company_on_web": judgments.company_on_web,
             "company_name_matches": judgments.company_name_matches,
             "posting_site": judgments.posting_site,
             "posting_page": None if chk.page is None else {k: chk.page[k] for k in ("reachable", "status", "https", "final_host", "error")},
