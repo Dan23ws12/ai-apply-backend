@@ -294,10 +294,21 @@ function removeReplacedAiFolder(oldPaths: Array<string | null | undefined>, newR
     try {
       const note = path.join(dir, "job.txt");
       if (existsSync(note)) unlinkSync(note);
-      if (readdirSync(dir).length === 0) rmdirSync(dir);
+      removeEmptyUpToDocsRoot(dir);
     } catch (err) {
       logger.warn({ err, dir }, "Could not remove the previous application folder");
     }
+  }
+}
+
+/** Removes an empty application folder, then its date folder when that day has nothing left. */
+function removeEmptyUpToDocsRoot(start: string) {
+  let current = start;
+  while (path.basename(current) !== "application-docs") {
+    if (!existsSync(current) || readdirSync(current).length > 0) break;
+    const parent = path.dirname(current);
+    rmdirSync(current);
+    current = parent;
   }
 }
 

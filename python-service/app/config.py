@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     ai_effort_fraud: str = "low"
     ai_model_match: str = ""
     ai_effort_match: str = "low"
-    # Fraud check step 3: search for the company on LinkedIn with Claude's web search tool.
+    # Fraud check step 3: search for the company on the web and on LinkedIn.
     fraud_web_search: bool = True
     fraud_max_searches: int = 3
     # Fraud check steps 2 and 5: download the posting page to read it and check the site.
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # Repo root: holds .agents/skills, shared-references, resumes/ and application-docs/.
     # A relative path is resolved from the python-service folder.
     project_root: Path = Path("..")
-    # One folder per application. A relative path is resolved from project_root.
+    # Date folders, each holding that day's application folders. A relative path is resolved from project_root.
     application_docs_dir: Path = Path("application-docs")
 
     @property

@@ -240,10 +240,11 @@ def _apply_urls(job: Job) -> list[str]:
     return urls
 
 
-def write_job_note(folder: Path, req: DocumentsRequest, ids: list[str]) -> None:
+def write_job_note(folder: Path, req: DocumentsRequest, ids: list[str], created: date) -> None:
     """Plain-text note for searching the folder. Not uploaded with the application."""
     job = req.job
     lines = [
+        f"Created: {created:%Y-%m-%d}",
         f"Position: {job.title}",
         f"Company: {job.company}",
         f"Search website: {job.search_website or ''}",
@@ -255,7 +256,7 @@ def write_job_note(folder: Path, req: DocumentsRequest, ids: list[str]) -> None:
         *(f"- {url}" for url in _apply_urls(job)),
     ]
     if not ids:
-        lines.insert(4, "-")
+        lines.insert(5, "-")
     if not _apply_urls(job):
         lines.append("-")
     (folder / "job.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -286,10 +287,12 @@ def build_documents(req: DocumentsRequest) -> dict:
         anchor.paragraph._p.addnext(new_p)
         _apply(ParaInfo(-1, anchor.section, "bullet", Paragraph(new_p, anchor.paragraph._parent)), nb.text, nb.bold_terms)
 
-    # One folder per posting: "{position} - {company} - {board ids}".
-    # Regenerating the same posting replaces Resume.docx, Cover Letter.docx, and job.txt.
+    # application-docs/{YYYY-MM-DD}/{position} - {company} - {board ids}/
+    # Every application created on the same day shares that date folder.
+    # Regenerating the same posting on the same day replaces the three files.
     ids = board_ids(req.job)
-    folder = settings.application_docs / application_folder_name(req.job, ids)
+    created = date.today()
+    folder = settings.application_docs / f"{created:%Y-%m-%d}" / application_folder_name(req.job, ids)
     folder.mkdir(parents=True, exist_ok=True)
     resume_path = folder / "Resume.docx"
     doc.save(str(resume_path))
@@ -298,7 +301,7 @@ def build_documents(req: DocumentsRequest) -> dict:
     letter = ai.cover_letter(req.resume_category, req.job, req.applicant, resume_text)
     cover_path = folder / "Cover Letter.docx"
     write_cover_letter(cover_path, resume_path, req.applicant, req.job, letter)
-    write_job_note(folder, req, ids)
+    write_job_note(folder, req, ids, created)
 
     return {
         "resume_path": str(resume_path),
