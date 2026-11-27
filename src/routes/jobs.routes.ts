@@ -77,21 +77,22 @@ jobsRouter.patch("/:id", validate({ params: IdParams, body: UpdateJobBody }), as
 });
 
 /**
- * Re-runs the evaluation: fraud likelihood rating first, then (unless fraud >= 80)
- * the job match rating. The two ratings are worked out independently.
+ * Re-runs the evaluation: fraud likelihood rating first, then the job match rating, unless
+ * the fraud rating is above the job's limit (its search's maxFraudRating, 40 for jobs no
+ * saved search found) or 80 or more. The two ratings are worked out independently.
  * Cached ratings are reused; add ?refresh=true to ask the AI again (costs an AI call).
  */
 jobsRouter.post("/:id/evaluate", validate({ params: IdParams, query: EvaluateQuery }), async (req, res) => {
   const { id } = params(req, IdParams);
   const { refresh } = query(req, EvaluateQuery);
   await ownJob(req.user!.id, id);
-  const { fraud, match, cached } = await evaluateJob(id, { userId: req.user!.id, requestId: req.requestId }, { refresh });
+  const { fraud, match, matchSkippedReason, cached } = await evaluateJob(id, { userId: req.user!.id, requestId: req.requestId }, { refresh });
   res.json({
     cached,
     fraud: { rating: fraud.fraud_rating, reasoning: fraud.reasoning, redFlags: fraud.red_flags, checks: fraud.checks },
     match: match
       ? { rating: match.match_rating, reasoning: match.reasoning, resumeCategory: match.resume_category, keywords: match.keywords }
-      : { rating: null, skipped: true, reason: "Fraud rating is 80 or more" },
+      : { rating: null, skipped: true, reason: matchSkippedReason },
   });
 });
 

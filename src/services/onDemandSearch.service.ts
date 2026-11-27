@@ -5,7 +5,7 @@ import type { JobSearchBody } from "../schemas/jobs.js";
 import { blacklistedCompanyNames } from "./blacklist.service.js";
 import { toClientJob } from "./clientJob.js";
 import { jobInclude, upsertPosting } from "./jobs.service.js";
-import { SKIP_MATCH_FRAUD_RATING, evaluateJob } from "./pipeline.service.js";
+import { evaluateJob, fraudBlockReason, fraudLimit } from "./pipeline.service.js";
 import { getUserSettings } from "./settings.service.js";
 import { isBlockedName } from "./search/companyName.js";
 import { boardWebsite, pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
@@ -123,7 +123,11 @@ export async function searchOnDemand(userId: string, body: JobSearchBody, reques
   if (body.evaluate) {
     // Rate jobs that have no rating yet: new ones, and older ones that were never rated.
     const toRate = jobs
-      .filter((r) => r.posting.fraudRating == null || (r.matchRating == null && r.posting.fraudRating < SKIP_MATCH_FRAUD_RATING))
+      .filter(
+        (r) =>
+          r.posting.fraudRating == null ||
+          (r.matchRating == null && !fraudBlockReason(r.posting.fraudRating, fraudLimit(r))),
+      )
       .filter((r) => r.applicationStatus !== "APPLIED")
       .map((r) => r.id);
     void rateInBackground(toRate, { userId, requestId });
