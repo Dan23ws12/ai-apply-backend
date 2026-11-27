@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     ai_model_fraud: str = "claude-haiku-5-5"
     ai_effort_fraud: str = "low"
     ai_model_match: str = "claude-opus-5-5"
-    ai_effort_match: str = "medium"
+    ai_effort_match: str = "low"
     # Fraud check step 3: search for the company on the web and on LinkedIn.
     fraud_web_search: bool = True
     fraud_max_searches: int = 5
