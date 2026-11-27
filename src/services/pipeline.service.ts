@@ -11,6 +11,7 @@ import { jobForAi, loadApplicant, postingForAi } from "./applicant.service.js";
 import { blacklistedCompanyNames, isBlacklisted } from "./blacklist.service.js";
 import { jobInclude, setStatus, upsertPosting } from "./jobs.service.js";
 import { getUserSettings } from "./settings.service.js";
+import { isBlockedName } from "./search/companyName.js";
 import { boardWebsite, DAY_MS, MAX_AGE_DAYS, pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
 import { normalizeCompanyName } from "./search/normalize.js";
 import { applicationKey, findApplied } from "./applicationLedger.service.js";
@@ -57,7 +58,7 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
       const unsaved = matching.filter(
         (j) =>
           !owned.has(j.externalId) &&
-          !blockedNames.has(companyKey(j.companyName)) &&
+          !isBlockedName(blockedNames, j.companyName) &&
           !!pickApplyOption(j.applyOptions, criteria.websites),
       ).length;
       // Saved applications for this search that are not applied, skipped or failed, and still recent enough.
@@ -97,7 +98,7 @@ export async function runSearchCriteria(criteriaId: string, ctx: Ctx) {
     if (!applyOption) continue;
     // The board it was found on, even when the apply link itself is the company's careers site.
     const foundOn = boardWebsite(j, criteria.websites) ?? apply.website;
-    const blacklisted = blockedNames.has(normalizedName);
+    const blacklisted = isBlockedName(blockedNames, j.companyName);
     // Same position, company and location already applied to (e.g. a re-post, or found by the other search API).
     const appliedBefore = blacklisted ? null : findApplied(applicationKey(ctx.userId, j.companyName, j.positionName, j.location));
     const status = blacklisted || appliedBefore ? ("SKIPPED" as const) : ("FOUND" as const);

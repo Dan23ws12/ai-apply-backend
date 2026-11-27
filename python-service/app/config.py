@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     ai_effort_match: str = "low"
     # Fraud check step 3: search for the company on the web and on LinkedIn.
     fraud_web_search: bool = True
-    fraud_max_searches: int = 3
+    fraud_max_searches: int = 4
     # Fraud check steps 2 and 5: download the posting page to read it and check the site.
     fraud_fetch_posting_page: bool = True
 

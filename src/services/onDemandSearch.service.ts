@@ -7,6 +7,7 @@ import { toClientJob } from "./clientJob.js";
 import { jobInclude, upsertPosting } from "./jobs.service.js";
 import { SKIP_MATCH_FRAUD_RATING, evaluateJob } from "./pipeline.service.js";
 import { getUserSettings } from "./settings.service.js";
+import { isBlockedName } from "./search/companyName.js";
 import { boardWebsite, pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
 import { normalizeCompanyName } from "./search/normalize.js";
 
@@ -67,13 +68,13 @@ export async function searchOnDemand(userId: string, body: JobSearchBody, reques
     // Cached jobs that are new to this user; fewer than the refresh threshold fetches the next page.
     countOpenJobs: async (matching) => {
       const owned = await ownedIds(matching.map((j) => j.externalId));
-      return matching.filter((j) => !owned.has(j.externalId) && !blocked.has(companyKey(j.companyName))).length;
+      return matching.filter((j) => !owned.has(j.externalId) && !isBlockedName(blocked, j.companyName)).length;
     },
   });
 
   const postedAfter = body.postedAfter ? new Date(body.postedAfter) : null;
   const candidates = outcome.jobs.filter(
-    (j) => !blocked.has(companyKey(j.companyName)) && (!postedAfter || !j.postedAt || j.postedAt >= postedAfter),
+    (j) => !isBlockedName(blocked, j.companyName) && (!postedAfter || !j.postedAt || j.postedAt >= postedAfter),
   );
 
   const ids: string[] = [];
