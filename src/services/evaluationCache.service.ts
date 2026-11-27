@@ -24,7 +24,7 @@ const ROOT = () => path.resolve(env.REFERENCES_ROOT);
 /** What each kind of rating depends on, besides the posting. */
 const SOURCES: Record<EvaluationKind, { files: string[]; dirs: { dir: string; match: RegExp; depth?: number }[] }> = {
   FRAUD: {
-    files: [".agents/skills/job-post-evaluation/SKILL.md", "python-service/app/fraud.py"],
+    files: [".agents/skills/job-post-evaluation/SKILL.md", "python-service/app/fraud.py", "shared-references/company-name-parts.json"],
     dirs: [],
   },
   MATCH: {

@@ -20,10 +20,22 @@ const DETECT_SCRIPT = String.raw`(() => {
   const ATTR = "data-jaf-id";
   const KINDS = ["text", "textarea", "select", "checkbox", "file", "number", "date", "email", "tel", "url", "password"];
   let counter = Number(document.body.getAttribute("data-jaf-counter") || "0");
+  // A random prefix per page keeps ids unique across tabs, iframes and page loads
+  // (the filler remembers handled ids, and every new page would otherwise start at f1).
+  let doc = document.body.getAttribute("data-jaf-doc");
+  if (!doc) {
+    doc = Math.random().toString(36).slice(2, 8);
+    document.body.setAttribute("data-jaf-doc", doc);
+  }
   function nextId() {
     counter += 1;
     document.body.setAttribute("data-jaf-counter", String(counter));
-    return "f" + counter;
+    return doc + "f" + counter;
+  }
+  // Site search bars and menus (e.g. the LinkedIn/Indeed job search box on a posting page)
+  // are not part of the application form.
+  function inSiteChrome(el) {
+    return !!el.closest('header, nav, [role="banner"], [role="navigation"], [role="search"], form[action*="search" i]');
   }
   function clean(s) { return (s || "").replace(/\s+/g, " ").replace(/\*/g, "").trim(); }
   function isVisible(el) {
@@ -62,6 +74,7 @@ const DETECT_SCRIPT = String.raw`(() => {
     const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute("type") || (tag === "textarea" ? "textarea" : tag === "select" ? "select" : "text")).toLowerCase();
     if (["hidden", "submit", "button", "reset", "image", "search"].includes(type)) continue;
+    if (inSiteChrome(el)) continue;
 
     if (type === "radio") {
       const name = el.getAttribute("name") || "";

@@ -17,6 +17,8 @@ export const jobInclude = {
   posting: { include: { company: true, applyOptions: { orderBy: { createdAt: "asc" } } } },
   applyOption: true,
   applicationFiles: true,
+  /** The search that found the job: its maxFraudRating is this job's fraud limit. */
+  searchCriteria: { select: { maxFraudRating: true } },
 } satisfies Prisma.ApplicationInclude;
 
 export type ApplicationWithPosting = Prisma.ApplicationGetPayload<{ include: typeof jobInclude }>;

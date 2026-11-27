@@ -244,7 +244,7 @@ export function applyFilters(jobs: NormalizedJob[], c: SearchCriteria): Normaliz
     if (seen.has(key)) return false; // same job listed on several boards
     seen.add(key);
 
-    if (!listedOn(job.applyOptions, c.websites)) return false;
+    if (!listedOn(job, c.websites)) return false;
     if (c.locationTypes.length && !c.locationTypes.includes(job.locationType) && job.locationType !== "UNKNOWN") return false;
     if (!matchesJobTypes(job, c.jobTypes)) return false;
     if (include.length && !include.some((k) => text.includes(k))) return false;
@@ -257,9 +257,24 @@ export function applyFilters(jobs: NormalizedJob[], c: SearchCriteria): Normaliz
   });
 }
 
-function listedOn(options: ApplyOption[], websites: SearchWebsite[]): boolean {
+/**
+ * True when the job is on one of the chosen boards. A LinkedIn, Glassdoor or Indeed posting
+ * whose apply button sends you to the company's careers site (or Workday, Greenhouse, etc.)
+ * counts as listed on that board, even if the search API only returned the external link.
+ */
+function listedOn(job: NormalizedJob, websites: SearchWebsite[]): boolean {
   if (!websites.length) return true;
-  return options.some((o) => websites.includes(o.website));
+  return boardWebsite(job, websites) !== undefined;
+}
+
+/** The chosen board the job was found on: an apply link on that board first, then the publisher. */
+export function boardWebsite(
+  job: Pick<NormalizedJob, "applyOptions" | "listedOn">,
+  websites: readonly string[],
+): SearchWebsite | undefined {
+  const option = job.applyOptions.find((o) => websites.includes(o.website));
+  if (option) return option.website;
+  return job.listedOn && websites.includes(job.listedOn) ? job.listedOn : undefined;
 }
 
 /**

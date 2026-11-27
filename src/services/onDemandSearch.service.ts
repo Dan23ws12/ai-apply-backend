@@ -5,9 +5,10 @@ import type { JobSearchBody } from "../schemas/jobs.js";
 import { blacklistedCompanyNames } from "./blacklist.service.js";
 import { toClientJob } from "./clientJob.js";
 import { jobInclude, upsertPosting } from "./jobs.service.js";
-import { SKIP_MATCH_FRAUD_RATING, evaluateJob } from "./pipeline.service.js";
+import { evaluateJob, fraudBlockReason, fraudLimit } from "./pipeline.service.js";
 import { getUserSettings } from "./settings.service.js";
-import { pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
+import { isBlockedName } from "./search/companyName.js";
+import { boardWebsite, pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
 import { normalizeCompanyName } from "./search/normalize.js";
 
 /**
@@ -67,13 +68,13 @@ export async function searchOnDemand(userId: string, body: JobSearchBody, reques
     // Cached jobs that are new to this user; fewer than the refresh threshold fetches the next page.
     countOpenJobs: async (matching) => {
       const owned = await ownedIds(matching.map((j) => j.externalId));
-      return matching.filter((j) => !owned.has(j.externalId) && !blocked.has(companyKey(j.companyName))).length;
+      return matching.filter((j) => !owned.has(j.externalId) && !isBlockedName(blocked, j.companyName)).length;
     },
   });
 
   const postedAfter = body.postedAfter ? new Date(body.postedAfter) : null;
   const candidates = outcome.jobs.filter(
-    (j) => !blocked.has(companyKey(j.companyName)) && (!postedAfter || !j.postedAt || j.postedAt >= postedAfter),
+    (j) => !isBlockedName(blocked, j.companyName) && (!postedAfter || !j.postedAt || j.postedAt >= postedAfter),
   );
 
   const ids: string[] = [];
@@ -100,13 +101,13 @@ export async function searchOnDemand(userId: string, body: JobSearchBody, reques
     }
     const applyOption = posting.applyOptions.find((o) => o.url === apply.url);
     if (!applyOption) continue;
-    const listedOn = j.applyOptions.find((o) => body.websites.includes(o.website as never)) ?? apply;
+    const foundOn = boardWebsite(j, body.websites) ?? apply.website;
     const app = await prisma.application.create({
       data: {
         userId,
         postingId: posting.id,
         applyOptionId: applyOption.id,
-        searchWebsite: listedOn.website,
+        searchWebsite: foundOn,
         applicationStatus: "FOUND",
         statusEvents: { create: { fromStatus: null, toStatus: "FOUND", message: "Found by on-demand search" } },
       },
@@ -122,7 +123,11 @@ export async function searchOnDemand(userId: string, body: JobSearchBody, reques
   if (body.evaluate) {
     // Rate jobs that have no rating yet: new ones, and older ones that were never rated.
     const toRate = jobs
-      .filter((r) => r.posting.fraudRating == null || (r.matchRating == null && r.posting.fraudRating < SKIP_MATCH_FRAUD_RATING))
+      .filter(
+        (r) =>
+          r.posting.fraudRating == null ||
+          (r.matchRating == null && !fraudBlockReason(r.posting.fraudRating, fraudLimit(r))),
+      )
       .filter((r) => r.applicationStatus !== "APPLIED")
       .map((r) => r.id);
     void rateInBackground(toRate, { userId, requestId });

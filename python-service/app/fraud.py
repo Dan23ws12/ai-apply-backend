@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -160,6 +161,93 @@ def fetch_page(url: str, max_bytes: int = 400_000) -> dict:
     return result
 
 
+# ───────────────────────── LinkedIn search names ─────────────────────────
+# Local branches are often posted as "DoorDash Canada" while the LinkedIn company page is just
+# "DoorDash". The search is run for the full name AND the name without the country at its
+# start or end; a hit for either one counts as the company being found.
+#
+# The country list and the generic words are shared with the Node API's blacklist matching
+# (src/services/search/normalize.ts), in shared-references/company-name-parts.json.
+#
+# Generic leftovers: when what is left after removing the country is only common words
+# ("Air" from "Air Canada", "Life" from "Canada Life", "Post" from "Canada Post"), the country
+# is part of the real name. That shorter name is not searched, so an unrelated "Air" company
+# on LinkedIn can't count as finding Air Canada.
+
+_NAME_PARTS_FILE = "shared-references/company-name-parts.json"
+# Small words ignored when deciding whether a leftover is generic ("Bank of" -> "bank").
+_FILLER_WORDS = {"the", "of", "and", "&", "for", "de", "du", "la", "le", "les", "et"}
+
+
+@lru_cache(maxsize=1)
+def _name_parts() -> tuple[re.Pattern, re.Pattern, frozenset[str]]:
+    data = json.loads((settings.root / _NAME_PARTS_FILE).read_text(encoding="utf-8"))
+    places = sorted({p.lower() for p in data["countries"] + data["regions"]}, key=len, reverse=True)
+    alt = "|".join(re.escape(p) for p in places)
+    sep = r"(?:\s*[-–—|:,/]\s*|\s+)"
+    at_start = re.compile(rf"^\(?(?:{alt})\)?{sep}", re.I)
+    at_end = re.compile(rf"{sep}\(?(?:{alt})\)?\.?$", re.I)
+    return at_start, at_end, frozenset(w.lower() for w in data["genericWords"])
+
+
+# Legal endings that can follow the country: "Siemens Canada Limited", "IBM Canada Ltd."
+_LEGAL_ENDING = re.compile(
+    r"(?:,?\s+(?:inc|ltd|llc|llp|lp|plc|corp|corporation|co|company|limited|ltée|ltee|ulc|gmbh|ag|sa|s\.a|sas|srl|"
+    r"bv|b\.v|nv|pty|pvt|private limited|pte|ab|oy|kk)\.?)+$", re.I)
+
+
+def is_generic_leftover(name: str) -> bool:
+    """True when a name left after removing a country is too generic to search on its own:
+    only common words ("Air", "Foods", "Royal Bank"), or one short word that is not an
+    acronym ("Air" is generic, "IBM" and "RBC" are not)."""
+    _, _, generic = _name_parts()
+    words = [w for w in re.findall(r"[^\W_]+(?:'[^\W_]+)?", name) if w.lower() not in _FILLER_WORDS]
+    if not words:
+        return True
+    if all(w.lower() in generic for w in words):
+        return True
+    return len(words) == 1 and len(words[0]) <= 3 and not words[0].isupper()
+
+
+def name_without_country(company: str) -> tuple[str | None, list[str]]:
+    """Removes a country or region at the start and/or end of the name, keeping any legal
+    ending. Returns (shorter name or None, generic leftovers that were rejected)."""
+    at_start, at_end, _ = _name_parts()
+    full = re.sub(r"\s+", " ", company or "").strip()
+    legal = _LEGAL_ENDING.search(full)
+    core = full[:legal.start()] if legal else full
+    no_start = at_start.sub("", core, count=1).strip()
+    stripped = at_end.sub("", no_start, count=1).strip()
+    if stripped.lower() == core.lower():
+        return None, []
+    stripped = stripped.strip(" -–—|:,/()")
+    if not stripped:
+        return None, []
+    if is_generic_leftover(stripped):
+        return None, [stripped]
+    return stripped, []
+
+
+def linkedin_search_names(company: str) -> tuple[list[str], list[str]]:
+    """Names to search LinkedIn for, and generic leftovers that were not used.
+    "DoorDash Canada" -> (["DoorDash Canada", "DoorDash"], []);
+    "Cliniconex Inc." -> (["Cliniconex Inc.", "Cliniconex"], []) since LinkedIn pages rarely
+    carry the legal ending; "Air Canada" -> (["Air Canada"], ["Air"])."""
+    full = re.sub(r"\s+", " ", company or "").strip()
+    if not full:
+        return [], []
+    short, rejected = name_without_country(full)
+    legal = _LEGAL_ENDING.search(full)
+    bare = full[:legal.start()].strip(" ,") if legal else ""
+    names = [full]
+    candidates = ((short,) if short else ()) + ((bare,) if bare else ()) + \
+        ((short + legal.group(0),) if short and legal else ())
+    for name in candidates:
+        if name.lower() not in {n.lower() for n in names}:
+            names.append(name)
+    return names[:3], rejected
+
+
 @dataclass
 class ScriptChecks:
     description: str
@@ -169,6 +257,8 @@ class ScriptChecks:
     posting_site: str
     name_matches_website: str
     findings: list[dict] = field(default_factory=list)
+    linkedin_names: list[str] = field(default_factory=list)
+    generic_names_skipped: list[str] = field(default_factory=list)
 
 
 def script_checks(req: FraudRequest) -> ScriptChecks:
@@ -223,7 +313,9 @@ def script_checks(req: FraudRequest) -> ScriptChecks:
     if FREE_EMAIL.search(description):
         findings.append({"finding": "Contact email uses a free personal email domain", "suggested_weight": "high"})
 
-    return ScriptChecks(description, page, company_host, posting_host, posting_site, name_matches, findings)
+    linkedin_names, generic_skipped = linkedin_search_names(req.company)
+    return ScriptChecks(description, page, company_host, posting_host, posting_site, name_matches, findings,
+                        linkedin_names, generic_skipped)
 
 
 # ───────────────────────── AI call (steps 3 and 6) ─────────────────────────
@@ -238,6 +330,19 @@ Steps (already done by a program where noted):
 3. Search for the company twice when a web search tool is available: once for the company
    on the web ("<company>"), and once for its LinkedIn page ("<company> LinkedIn"). A
    company page must exist; its size, industry and location should fit the posting.
+   Run each search as its own direct web_search call with one query; do not run searches
+   from code (searches are limited, and a failed code run still uses them up).
+   <linkedin_search_names> lists the names to look for: the full company name, the name
+   without a legal ending ("Cliniconex" for "Cliniconex Inc."; LinkedIn pages usually
+   leave it off) and, when the name starts or ends with a country or region (e.g.
+   "DoorDash Canada"), the name without it ("DoorDash"). If the full name finds nothing,
+   search the shorter names too.
+   A fitting company page under ANY of the names means linkedin is found (a local branch
+   of a global company is normal). Only set linkedin to not_found when none of the names
+   has a company page. The shorter name must clearly be the same company (same brand
+   and industry): "Air" from "Air Canada" matching an unrelated "Air" company does not
+   count. Likewise, finding the company on the web under any of the names
+   means company_on_web is found.
    Set linkedin and company_on_web to found or not_found from those searches. If no tool
    is available, set both to not_checked. not_checked is not a red flag.
 4. Company name on the website vs on the posting (program finding given). Recruitment
@@ -281,7 +386,9 @@ def _user_message(req: FraudRequest, chk: ScriptChecks) -> str:
     if chk.page is not None:
         page_info = {k: chk.page[k] for k in ("reachable", "status", "https", "final_host", "error")}
     return (
-        f"<company>{req.company}</company>\n<company_website>{req.company_website or 'unknown'}</company_website>\n"
+        f"<company>{req.company}</company>\n"
+        f"<linkedin_search_names>{json.dumps(chk.linkedin_names, ensure_ascii=False)}</linkedin_search_names>\n"
+        f"<company_website>{req.company_website or 'unknown'}</company_website>\n"
         f"<position>{req.title}</position>\n<location>{req.location or 'unknown'}</location>\n"
         f"<listed_on>{req.publisher or 'unknown'}</listed_on>\n<posting_link>{req.apply_url or 'unknown'}</posting_link>\n"
         f"<posting_page_check>{json.dumps(page_info)}</posting_page_check>\n"
@@ -301,12 +408,27 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def _with_web_search(client: anthropic.Anthropic, user: str) -> FraudJudgments:
-    """Step 3 with Claude's server-side web search. Final answer is a JSON object in text."""
+def _searches_run(blocks: list) -> list[str]:
+    """Queries of the web searches that returned results. A search that hit max_uses or
+    another error is left out, so it cannot count as "searched and not found"."""
+    queries: dict[str, str] = {}
+    ok: set[str] = set()
+    for b in blocks:
+        if b.type == "server_tool_use" and isinstance(b.input, dict) and "query" in b.input:
+            queries[b.id] = str(b.input["query"])
+        elif b.type == "web_search_tool_result" and isinstance(b.content, list):
+            ok.add(b.tool_use_id)
+    return [q for i, q in queries.items() if i in ok]
+
+
+def _with_web_search(client: anthropic.Anthropic, user: str) -> tuple[FraudJudgments, list[str]]:
+    """Step 3 with Claude's server-side web search. Final answer is a JSON object in text.
+    Also returns the queries of the searches that actually ran."""
     model = settings.fraud_model
     tool_type = "web_search_20250305" if "haiku" in model else "web_search_20260209"
     messages: list[dict] = [{"role": "user", "content": user + "\n\n" + JSON_INSTRUCTION}]
     response = None
+    blocks: list = []
     for _ in range(4):  # the server pauses long tool loops with stop_reason "pause_turn"
         started = time.time()
         response = client.messages.create(
@@ -318,13 +440,36 @@ def _with_web_search(client: anthropic.Anthropic, user: str) -> FraudJudgments:
             output_config={"effort": settings.ai_effort_fraud},
         )
         usage.record(response, usage.FRAUD_RATING, started)  # each continuation is billed separately
+        blocks.extend(response.content)
         if response.stop_reason != "pause_turn":
             break
         messages = [messages[0], {"role": "assistant", "content": response.content}]
     if response is None or response.stop_reason == "refusal":
         raise RuntimeError("fraud check was refused")
     text = "".join(b.text for b in response.content if b.type == "text")
-    return FraudJudgments.model_validate(_extract_json(text))
+    return FraudJudgments.model_validate(_extract_json(text)), _searches_run(blocks)
+
+
+def _drop_unsearched(judgments: FraudJudgments, searches: list[str]) -> tuple[FraudJudgments, str]:
+    """not_found only counts when a search for it really ran. When the LinkedIn search (or
+    every search) failed or was cut off by the search limit, the check becomes not_checked,
+    which is not a red flag. Returns the corrected judgments and a note for the reasoning."""
+    update: dict = {}
+    if judgments.linkedin == "not_found" and not any("linkedin" in q.lower() for q in searches):
+        update["linkedin"] = "not_checked"
+    if judgments.company_on_web == "not_found" and not searches:
+        update["company_on_web"] = "not_checked"
+    if not update:
+        return judgments, ""
+    flags = [f for f in judgments.red_flags
+             if not ("linkedin" in update and _linkedin_absence(f.flag))
+             and not ("company_on_web" in update and _web_absence(f.flag))]
+    update["red_flags"] = flags
+    what = " and ".join({"linkedin": "LinkedIn", "company_on_web": "web"}[k] for k in ("linkedin", "company_on_web") if k in update)
+    log.warning("Fraud check reported %s not_found without a completed search (searches run: %s); using not_checked",
+                what, searches)
+    noun = "searches" if " and " in what else "search"
+    return judgments.model_copy(update=update), f" The {what} {noun} did not complete, so not finding the company was not counted."
 
 
 def _without_tools(client: anthropic.Anthropic, user: str) -> FraudJudgments:
@@ -388,6 +533,12 @@ def _web_absence(flag: str) -> bool:
 def _ensure_presence_flags(judgments: FraudJudgments) -> list[FraudFlag]:
     """A failed search is a red flag even when the model forgets to list it. A skipped search is not."""
     flags = list(judgments.red_flags)
+    # Found under one of the names (e.g. "DoorDash" for "DoorDash Canada"): a leftover
+    # "not found under the full name" flag must not push the rating to 80.
+    if judgments.linkedin == "found":
+        flags = [f for f in flags if not _linkedin_absence(f.flag)]
+    if judgments.company_on_web == "found":
+        flags = [f for f in flags if not _web_absence(f.flag)]
     if judgments.linkedin == "not_found" and not any(_linkedin_absence(f.flag) for f in flags):
         flags.append(FraudFlag(flag=LINKEDIN_ABSENT_FLAG, weight="high"))
     if judgments.company_on_web == "not_found" and not any(_web_absence(f.flag) for f in flags):
@@ -415,9 +566,11 @@ def evaluate_fraud(client: anthropic.Anthropic, req: FraudRequest) -> FraudResul
     chk = script_checks(req)
     user = _user_message(req, chk)
     judgments: FraudJudgments | None = None
+    search_note = ""
     if settings.fraud_web_search:
         try:
-            judgments = _with_web_search(client, user)
+            judgments, searches = _with_web_search(client, user)
+            judgments, search_note = _drop_unsearched(judgments, searches)
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             log.warning("Fraud check with web search gave no usable JSON (%s); retrying without tools", e)
     if judgments is None:
@@ -426,7 +579,7 @@ def evaluate_fraud(client: anthropic.Anthropic, req: FraudRequest) -> FraudResul
     flags = _ensure_presence_flags(judgments)
     rating, raised_for_presence = fraud_rating(flags)
     flags_text = "; ".join(f"{f.flag} ({f.weight})" for f in flags) or "none"
-    reasoning = f"{judgments.reasoning} Red flags: {flags_text}."
+    reasoning = f"{judgments.reasoning}{search_note} Red flags: {flags_text}."
     if raised_for_presence:
         reasoning += " The rating is at least 80 because the company could not be found on LinkedIn or on the web."
     return FraudResult(
@@ -438,6 +591,8 @@ def evaluate_fraud(client: anthropic.Anthropic, req: FraudRequest) -> FraudResul
             "company_on_web": judgments.company_on_web,
             "company_name_matches": judgments.company_name_matches,
             "posting_site": judgments.posting_site,
+            "linkedin_search_names": chk.linkedin_names,
+            "generic_names_skipped": chk.generic_names_skipped,
             "posting_page": None if chk.page is None else {k: chk.page[k] for k in ("reachable", "status", "https", "final_host", "error")},
             "program_findings": chk.findings,
         },

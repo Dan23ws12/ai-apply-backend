@@ -8,7 +8,7 @@ AI Job Apply finds jobs that match your search criteria and filters, rates each 
 Search criteria ──► JSearch (SerpApi Google Jobs if JSearch fails)
                      │
                      ▼
-            Filter: LinkedIn/Glassdoor only, location type, job type,
+            Filter: listed on LinkedIn/Glassdoor/Indeed (incl. ones that apply on the company site), location type, job type,
                     keywords, salary, blacklisted companies, duplicates
                      │
                      ▼
@@ -289,7 +289,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | `POST /api/search-criteria/:id/run` | Run a search now. The reply says where jobs came from (`source`: `api`, `cache` or `cache+api`), whether the search API was called (`apiCalled`) and how many open jobs there were before the run (`openJobsBefore`). A search's `maxResults` (optional) overrides your `jobsPerSearch`. Jobs you already applied to (same application key) are saved as `SKIPPED` and counted in `skippedAlreadyApplied`. |
 | `GET /api/companies?blacklisted=true&search=`, `POST /api/companies`, `PATCH /api/companies/:id` | Companies. Each one shows `blacklisted` for **your** blacklist; `{"blacklisted":true}` adds it, `false` removes it. |
 | `GET /api/companies/blacklisted` | Your blacklist |
-| `PUT /api/companies/:id/blacklist`, `DELETE /api/companies/:id/blacklist` | Add a company to, or remove it from, your blacklist. Adding it marks your open jobs there as `SKIPPED`. |
+| `PUT /api/companies/:id/blacklist`, `DELETE /api/companies/:id/blacklist` | Add a company to, or remove it from, your blacklist. Adding it marks your open jobs there as `SKIPPED`. Entries keep their country: blacklisting "DoorDash" also covers "DoorDash Canada", "DoorDash UK" and so on, but blacklisting "DoorDash Canada" covers only that one. Names where the country is part of the real name ("Air Canada", "Canada Post") are matched exactly. The country list and generic words are in `shared-references/company-name-parts.json`. |
 | `DELETE /api/companies/:id` | Delete a company for everyone. Its blacklist rows go with it; its jobs are kept. |
 | `GET /api/jobs?status=&website=&locationType=&minMatch=&maxFraud=&page=` | Your jobs |
 | `POST /api/jobs/search` | Search now and get the jobs back (array, in the frontend's `Job` shape). Body: `query`, `location`, `datePosted` (`PAST_WEEK`, `PAST_2_WEEKS`, `PAST_MONTH` or `ALL_TIME`), `websites`, `workModels`, `employmentTypes` (incl. `PERMANENT`), optional `postedAfter`, `limit`, `evaluate`. Details in `X-Search-*` headers. |
@@ -409,7 +409,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | Answers to common questions (relocation, pronouns, etc.) | `extraAnswers` in your profile, or `PUT /api/answers/:id` |
 | Which job sites count | `websites` in each search (`LINKEDIN`, `GLASSDOOR`, `INDEED`, `COMPANY_SITE`, `OTHER`) |
 | Match and fraud limits | `minMatchRating` / `maxFraudRating` in each search |
-| Prefer LinkedIn/Glassdoor links over company sites | Set `PREFER_DIRECT_APPLY=false` in `.env` |
+| Prefer LinkedIn/Glassdoor links over company sites | Set `PREFER_DIRECT_APPLY=false` in `.env`. When a board posting's apply button goes to the company's careers site (or Workday, Greenhouse, etc.), click it in the auto-fill window: the new tab is followed and filled too. |
 | Search and rating cache lifetimes, refresh threshold | `SEARCH_CACHE_TTL_HOURS`, `SEARCH_REFRESH_THRESHOLD`, `SEARCH_CACHE_MAX_PAGES`, `FRAUD_CACHE_TTL_DAYS`, `MATCH_CACHE_TTL_DAYS`, `EVALUATION_CACHE_VERSION` in `.env` |
 | How long the filler watches a form | `AUTOFILL_WATCH_MINUTES` in `.env` |
 | Fields filled from your profile | The `RULES` list in `src/autofill/profileMapper.ts` |
