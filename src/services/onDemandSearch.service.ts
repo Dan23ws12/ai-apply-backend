@@ -7,7 +7,7 @@ import { toClientJob } from "./clientJob.js";
 import { jobInclude, upsertPosting } from "./jobs.service.js";
 import { SKIP_MATCH_FRAUD_RATING, evaluateJob } from "./pipeline.service.js";
 import { getUserSettings } from "./settings.service.js";
-import { pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
+import { boardWebsite, pickApplyOption, searchJobs } from "./search/jobSearch.service.js";
 import { normalizeCompanyName } from "./search/normalize.js";
 
 /**
@@ -100,13 +100,13 @@ export async function searchOnDemand(userId: string, body: JobSearchBody, reques
     }
     const applyOption = posting.applyOptions.find((o) => o.url === apply.url);
     if (!applyOption) continue;
-    const listedOn = j.applyOptions.find((o) => body.websites.includes(o.website as never)) ?? apply;
+    const foundOn = boardWebsite(j, body.websites) ?? apply.website;
     const app = await prisma.application.create({
       data: {
         userId,
         postingId: posting.id,
         applyOptionId: applyOption.id,
-        searchWebsite: listedOn.website,
+        searchWebsite: foundOn,
         applicationStatus: "FOUND",
         statusEvents: { create: { fromStatus: null, toStatus: "FOUND", message: "Found by on-demand search" } },
       },

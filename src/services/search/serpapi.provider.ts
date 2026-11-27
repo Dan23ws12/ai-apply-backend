@@ -128,6 +128,7 @@ function toNormalized(j: SerpJob): NormalizedJob {
     postedAt,
     ...salary,
     applyOptions: options,
+    listedOn: websiteFrom(j.via),
   };
 }
 

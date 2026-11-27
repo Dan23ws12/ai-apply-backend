@@ -8,7 +8,7 @@ AI Job Apply finds jobs that match your search criteria and filters, rates each 
 Search criteria ──► JSearch (SerpApi Google Jobs if JSearch fails)
                      │
                      ▼
-            Filter: LinkedIn/Glassdoor only, location type, job type,
+            Filter: listed on LinkedIn/Glassdoor/Indeed (incl. ones that apply on the company site), location type, job type,
                     keywords, salary, blacklisted companies, duplicates
                      │
                      ▼
@@ -409,7 +409,7 @@ curl -X POST localhost:4000/api/jobs/$JOB_ID/autofill -H "authorization: Bearer 
 | Answers to common questions (relocation, pronouns, etc.) | `extraAnswers` in your profile, or `PUT /api/answers/:id` |
 | Which job sites count | `websites` in each search (`LINKEDIN`, `GLASSDOOR`, `INDEED`, `COMPANY_SITE`, `OTHER`) |
 | Match and fraud limits | `minMatchRating` / `maxFraudRating` in each search |
-| Prefer LinkedIn/Glassdoor links over company sites | Set `PREFER_DIRECT_APPLY=false` in `.env` |
+| Prefer LinkedIn/Glassdoor links over company sites | Set `PREFER_DIRECT_APPLY=false` in `.env`. When a board posting's apply button goes to the company's careers site (or Workday, Greenhouse, etc.), click it in the auto-fill window: the new tab is followed and filled too. |
 | Search and rating cache lifetimes, refresh threshold | `SEARCH_CACHE_TTL_HOURS`, `SEARCH_REFRESH_THRESHOLD`, `SEARCH_CACHE_MAX_PAGES`, `FRAUD_CACHE_TTL_DAYS`, `MATCH_CACHE_TTL_DAYS`, `EVALUATION_CACHE_VERSION` in `.env` |
 | How long the filler watches a form | `AUTOFILL_WATCH_MINUTES` in `.env` |
 | Fields filled from your profile | The `RULES` list in `src/autofill/profileMapper.ts` |

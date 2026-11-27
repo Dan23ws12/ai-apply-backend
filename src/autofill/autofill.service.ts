@@ -20,7 +20,9 @@ import { fileKind, profileValue } from "./profileMapper.js";
  * ──────────────
  * 1. Opens a VISIBLE Chromium window using a saved browser profile, so you stay
  *    logged in to LinkedIn / Glassdoor between runs (you log in yourself the first time).
- * 2. Goes to the job's application link.
+ * 2. Goes to the job's application link. If that is a LinkedIn, Glassdoor or Indeed posting
+ *    whose apply button leads to the company's careers site (or Workday, Greenhouse, etc.),
+ *    the new tab or window it opens is followed and filled too, and so is a same-tab redirect.
  * 3. Every few seconds, finds new empty fields (also inside iframes and in later
  *    steps of multi-page forms) and fills them from: your profile -> saved answers -> AI.
  * 4. Uploads the tailored resume and cover letter to file inputs.
@@ -35,7 +37,10 @@ interface Ctx {
 
 interface Session {
   jobId: string;
+  /** The page the job link was opened in. */
   page: Page;
+  /** Every open page for this job: the first page plus the tabs/windows it opened. */
+  pages: Set<Page>;
   startedAt: Date;
   filledFields: number;
   stopped: boolean;
@@ -83,9 +88,9 @@ export async function startAutofill(jobId: string, ctx: Ctx) {
   const page = await context.newPage();
   await page.goto(applicationLink, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-  const session: Session = { jobId, page, startedAt: new Date(), filledFields: 0, stopped: false };
+  const session: Session = { jobId, page, pages: new Set(), startedAt: new Date(), filledFields: 0, stopped: false };
   sessions.set(jobId, session);
-  page.on("close", () => (session.stopped = true));
+  trackPage(session, page, ctx);
 
   await setStatus(jobId, "INCOMPLETE", { statusMessage: "Auto-fill in progress" });
   audit({ type: "AUTOFILL", userId: ctx.userId, requestId: ctx.requestId, url: applicationLink, message: `start job ${jobId}` });
@@ -96,9 +101,35 @@ export async function startAutofill(jobId: string, ctx: Ctx) {
   return { jobId, url: applicationLink, startedAt: session.startedAt };
 }
 
+/**
+ * Watches a page and every tab/window it opens, so clicking "Apply on company website" on a
+ * job board carries the auto-fill over to the external careers site. The session stops only
+ * when all of its pages are closed.
+ */
+function trackPage(session: Session, page: Page, ctx: Ctx) {
+  session.pages.add(page);
+  page.on("close", () => {
+    session.pages.delete(page);
+    if (!session.pages.size) session.stopped = true;
+  });
+  page.on("popup", (popup) => {
+    if (session.stopped) return;
+    trackPage(session, popup, ctx);
+    void popup
+      .waitForLoadState("domcontentloaded", { timeout: 30_000 })
+      .catch(() => undefined)
+      .then(() => {
+        if (popup.isClosed()) return;
+        audit({ type: "AUTOFILL", userId: ctx.userId, url: popup.url(), message: `job ${session.jobId}: followed apply link to a new tab` });
+      });
+  });
+}
+
 export function autofillStatus(jobId: string) {
   const s = sessions.get(jobId);
-  return s ? { jobId, running: !s.stopped, filledFields: s.filledFields, startedAt: s.startedAt } : null;
+  if (!s) return null;
+  const urls = [...s.pages].filter((p) => !p.isClosed()).map((p) => p.url());
+  return { jobId, running: !s.stopped, filledFields: s.filledFields, startedAt: s.startedAt, urls };
 }
 
 interface FillInputs {
@@ -115,25 +146,37 @@ async function fillLoop(session: Session, inputs: FillInputs, ctx: Ctx) {
 
   try {
     while (!session.stopped && Date.now() < deadline) {
-      const page = session.page;
+      // The job-board page and any careers-site tab it opened. Newest first: that is
+      // usually the application form.
+      const pages = [...session.pages].filter((p) => !p.isClosed()).reverse();
 
       // Submission detection: the USER clicked submit and the site confirmed it.
       // Only checked after we filled something, so a job description can't trigger it.
-      const bodyText = markedFilled ? await page.locator("body").innerText({ timeout: 5000 }).catch(() => "") : "";
-      if (markedFilled && SUBMITTED_TEXT.test(bodyText)) {
+      let submittedOn: Page | undefined;
+      if (markedFilled) {
+        for (const page of pages) {
+          const bodyText = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
+          if (SUBMITTED_TEXT.test(bodyText)) {
+            submittedOn = page;
+            break;
+          }
+        }
+      }
+      if (submittedOn) {
         await setStatus(session.jobId, "APPLIED", { applicationDate: new Date(), statusMessage: "Submitted by user" });
-        audit({ type: "AUTOFILL", userId: ctx.userId, url: page.url(), message: `job ${session.jobId} submitted by user` });
+        audit({ type: "AUTOFILL", userId: ctx.userId, url: submittedOn.url(), message: `job ${session.jobId} submitted by user` });
         break;
       }
 
-      await fillLoginIfNeeded(page, inputs.credentials);
-
-      for (const frame of page.frames()) {
-        const filled = await fillFrame(frame, inputs, handled, ctx).catch((err) => {
-          logger.debug({ err: (err as Error).message }, "Frame fill skipped");
-          return 0;
-        });
-        session.filledFields += filled;
+      for (const page of pages) {
+        await fillLoginIfNeeded(page, inputs.credentials).catch(() => undefined);
+        for (const frame of page.frames()) {
+          const filled = await fillFrame(frame, inputs, handled, ctx).catch((err) => {
+            logger.debug({ err: (err as Error).message }, "Frame fill skipped");
+            return 0;
+          });
+          session.filledFields += filled;
+        }
       }
 
       if (session.filledFields > 0 && !markedFilled) {
@@ -268,6 +311,7 @@ function bestOption(options: string[], answer: string): number {
  * the saved credentials. You still click "Sign in" yourself (and handle any 2FA).
  */
 async function fillLoginIfNeeded(page: Page, creds: FillInputs["credentials"]) {
+  if (!/^https?:/i.test(page.url())) return; // about:blank while a new tab is still loading
   const host = new URL(page.url()).hostname;
   let login: SiteLogin | undefined;
   if (host.endsWith("linkedin.com")) login = creds.linkedin;

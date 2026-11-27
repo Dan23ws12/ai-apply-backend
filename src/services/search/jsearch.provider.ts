@@ -123,5 +123,6 @@ function toNormalized(j: JSearchJob): NormalizedJob {
     salaryCurrency: j.job_salary_currency ?? null,
     salaryPeriod: j.job_salary_period ?? null,
     applyOptions: options,
+    listedOn: websiteFrom(j.job_publisher),
   };
 }

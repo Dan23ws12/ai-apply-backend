@@ -30,6 +30,12 @@ export interface NormalizedJob {
   salaryCurrency: string | null;
   salaryPeriod: string | null;
   applyOptions: ApplyOption[];
+  /**
+   * The job board the posting was found on (JSearch job_publisher / SerpApi "via"), kept even
+   * when the only apply link goes to the company's own careers site or an ATS. Missing on
+   * search results cached before this field existed.
+   */
+  listedOn?: SearchWebsite;
 }
 
 export interface SearchParams {
